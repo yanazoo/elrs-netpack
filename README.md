@@ -28,3 +28,9 @@ versions included in PlatformIO.
 ## Firmware Installation
 
 To install the ELRS Netpack firmware, use the [Netpack Installer](https://github.com/i-am-grub/netpack-installer) plugin for RotorHazard.
+
+## 3D-Printable Case by [Hazard Creative](https://github.com/HazardCreative)
+
+[![3D-Printable Case for RH+ELRS Netpack](resources/3d-case/case-photo.jpg)](https://github.com/i-am-grub/elrs-netpack/tree/main/resources/3d-case)
+
+The resources for a 3D printable case for the development board can be found [here](https://github.com/i-am-grub/elrs-netpack/tree/main/resources/3d-case)
