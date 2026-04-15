@@ -239,27 +239,33 @@ void runESPNOWServer(void *pvParameters)
 
     nvs_close(bp_mac_handle);
 
-    // Start WiFi for ESPNOW
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    // WiFi driver is already started by app_main in STA mode.
+    // Set the STA MAC to the backpack UID *before* connecting so the router
+    // and the ELRS backpack both see the correct source address.
+    ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, bindAddress));
 
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_set_channel(CONFIG_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
-    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
+    // Enable long-range protocol for ESP-NOW (does not affect regular WiFi).
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA,
+        WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
 
     // Start ESPNOW
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_send_cb(espnowSendCB));
     ESP_ERROR_CHECK(esp_now_register_recv_cb(espnowRecvCB));
 
-    ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, bindAddress));
-
     // Register default peer if UID set
     if (bindAddress[0] != 0 || bindAddress[1] != 0 || bindAddress[2] != 0 ||
         bindAddress[3] != 0 || bindAddress[4] != 0 || bindAddress[5] != 0)
         registerPeer(bindAddress);
+
+    // Connect to the configured WiFi AP so the TCP server can get an IP.
+    // The MAC is already set above so the router sees the correct identity.
+    wifi_config_t sta_cfg = {};
+    strncpy((char *)sta_cfg.sta.ssid,     CONFIG_WIFI_STA_SSID,     sizeof(sta_cfg.sta.ssid));
+    strncpy((char *)sta_cfg.sta.password, CONFIG_WIFI_STA_PASSWORD, sizeof(sta_cfg.sta.password));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
+    ESP_ERROR_CHECK(esp_wifi_connect());
+    ESP_LOGI(TAG, "Connecting to AP: %s", CONFIG_WIFI_STA_SSID);
 
     while (1)
     {
@@ -345,7 +351,10 @@ void runESPNOWServer(void *pvParameters)
                         memcpy(sendAddress, bindAddress, 6);
                     }
 
+                    // Disconnect before changing MAC, then reconnect.
+                    esp_wifi_disconnect();
                     ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, sendAddress));
+                    ESP_ERROR_CHECK(esp_wifi_connect());
 
                     if (sendAddress[0] != 0 || sendAddress[1] != 0 || sendAddress[2] != 0 ||
                         sendAddress[3] != 0 || sendAddress[4] != 0 || sendAddress[5] != 0)

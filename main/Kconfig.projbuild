@@ -1,0 +1,25 @@
+menu "WiFi / XIAO ESP32-S3 options"
+
+    config WIFI_STA_SSID
+        string "WiFi SSID (access point to connect to)"
+        default "ELRS-Netpack-AP"
+        help
+            SSID of the existing WiFi network that the XIAO should join.
+            RotorHazard must be on the same network.
+
+    config WIFI_STA_PASSWORD
+        string "WiFi Password"
+        default ""
+        help
+            Password for the WiFi network. Leave empty for an open network.
+
+    config XIAO_EXTERNAL_ANTENNA
+        bool "Enable external U.FL antenna (XIAO ESP32-S3 Sense, GPIO14)"
+        default n
+        help
+            Drive GPIO14 HIGH to route RF through the external U.FL connector
+            instead of the built-in PCB antenna.
+            Only needed on the XIAO ESP32-S3 Sense variant when an external
+            antenna is physically connected.
+
+endmenu
