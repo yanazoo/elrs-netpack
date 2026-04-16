@@ -1,5 +1,7 @@
 **/build
 sdkconfig.old
-**/.vscode
+# .vscode はプロジェクト設定として追跡（ESP-IDF 拡張の設定を共有するため）
+# .vscode is tracked to share ESP-IDF extension config across the team
+.vscode/*.log
 **/managed_components
 *.lock

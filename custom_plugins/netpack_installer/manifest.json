@@ -1,0 +1,12 @@
+{
+  "name": "ELRS Netpack Installer (XIAO WiFi)",
+  "description": "XIAO ESP32-S3 WiFi 対応版 ELRS Netpack ファームウェアインストーラー / ELRS Netpack firmware installer for XIAO ESP32-S3 WiFi variant",
+  "author": "yanazoo",
+  "version": "1.0.0",
+  "apiVersion": ">=1.2",
+  "homepage": "https://github.com/yanazoo/elrs-netpack",
+  "license": "MIT",
+  "dependencies": {
+    "esptool": "<5.0.0"
+  }
+}
