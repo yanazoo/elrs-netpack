@@ -5,4 +5,33 @@ menu "TCP Socket Server options"
         help
             Set TCP server listening port.
 
+    choice TCP_CONNECTION_TYPE
+        prompt "Network connection type"
+        default TCP_USE_ETHERNET
+        help
+            Select the network interface for the TCP server.
+            - Ethernet: Waveshare ESP32-S3 Ethernet board (W5500)
+            - WiFi:     XIAO ESP32-S3 or any WiFi-only ESP32-S3 board
+
+        config TCP_USE_ETHERNET
+            bool "Ethernet (W5500 / Waveshare ESP32-S3)"
+
+        config TCP_USE_WIFI
+            bool "WiFi Station (XIAO ESP32-S3 etc.)"
+    endchoice
+
+    if TCP_USE_WIFI
+        config TCP_WIFI_SSID
+            string "WiFi SSID"
+            default "myssid"
+            help
+                SSID of the WiFi access point to connect to.
+
+        config TCP_WIFI_PASSWORD
+            string "WiFi Password"
+            default ""
+            help
+                Password for the WiFi access point.
+    endif
+
 endmenu

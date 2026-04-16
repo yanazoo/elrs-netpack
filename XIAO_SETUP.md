@@ -3,18 +3,37 @@
 
 ---
 
-## 目次 / Contents
+## 概要 / Overview
 
-1. [必要なもの / Requirements](#必要なもの--requirements)
-2. [ファームウェア書き込み（Windows + VS Code）](#ファームウェア書き込みwindows--vs-code)
-3. [WiFi 設定](#wifi-設定--wifi-configuration)
-4. [RotorHazard プラグインのインストール](#rotorhazard-プラグインのインストール)
-5. [動作確認](#動作確認--verification)
-6. [トラブルシューティング](#トラブルシューティング--troubleshooting)
+このブランチは Waveshare ESP32-S3 Ethernet（Ethernet/W5500）と
+**Seeed Studio XIAO ESP32-S3（WiFi STA）** の両方を
+menuconfig で切り替えられるよう拡張したものです。
+
+This branch adds WiFi STA support alongside the existing Ethernet (W5500) interface,
+selectable via `idf.py menuconfig`.
+
+```
+[RotorHazard (Raspberry Pi)]
+        ↓ TCP port 8080
+   XIAO ESP32-S3  ─── WiFi LAN ───  Router
+        ↓ ESPNow (2.4 GHz)
+   ELRSバックパック / ELRS Backpack
+```
 
 ---
 
-## 必要なもの / Requirements
+## 目次 / Contents
+
+1. [必要なもの / Requirements](#必要なもの)
+2. [接続タイプの選択 / Choosing connection type](#接続タイプの選択)
+3. [ファームウェア書き込み（Windows + VS Code）](#ファームウェア書き込み)
+4. [RotorHazard プラグインのインストール](#rotorhazard-プラグインのインストール)
+5. [動作確認 / Verification](#動作確認)
+6. [トラブルシューティング / Troubleshooting](#トラブルシューティング)
+
+---
+
+## 必要なもの
 
 | ハードウェア | 備考 |
 |---|---|
@@ -33,82 +52,83 @@
 
 ---
 
-## ファームウェア書き込み（Windows + VS Code）
+## 接続タイプの選択
+
+`idf.py menuconfig` → **TCP Socket Server options** → **Network connection type** で選択：
+
+| 選択肢 | 対象ボード |
+|---|---|
+| `Ethernet (W5500 / Waveshare ESP32-S3)` | 元のデフォルト |
+| `WiFi Station (XIAO ESP32-S3 etc.)` | **XIAO の場合はこちら** |
+
+WiFi を選んだ場合、同メニュー内に **WiFi SSID** と **WiFi Password** 入力欄が表示されます。
+
+`sdkconfig.defaults` に XIAO 用のデフォルト値が設定済みです：
+- 接続タイプ: `WiFi Station`
+- SSID: `y_air-GL`
+- パスワード: `88888888`
+
+---
+
+## ファームウェア書き込み
 
 ### 1. ESP-IDF 拡張機能のインストール
 
 1. VS Code を開く
-2. 拡張機能タブ（Ctrl+Shift+X）で `Espressif IDF` を検索
-3. インストール → 初回セットアップウィザードで **ESP-IDF v5.4.1** を選択
+2. 拡張機能タブ（Ctrl+Shift+X）で `Espressif IDF` を検索してインストール
+3. 初回セットアップウィザードで **ESP-IDF v5.4.1** を選択
 
-### 2. このリポジトリをクローン
+### 2. リポジトリをクローン
 
 ```powershell
 git clone -b claude/wifi-espnow-bridge-jptTt `
   https://github.com/yanazoo/elrs-netpack
 cd elrs-netpack
-```
-
-VS Code で開く：
-```powershell
 code .
 ```
 
-### 3. WiFi 設定（menuconfig）
-
-`sdkconfig.defaults` に初期値が設定されています：
-- SSID: `y_air-GL`
-- パスワード: `88888888`
-
-変更したい場合：
-1. `Ctrl+Shift+P` → `ESP-IDF: SDK Configuration Editor (Menuconfig)`
-2. `WiFi / XIAO ESP32-S3 options` を開く
-3. **WiFi SSID** と **WiFi Password** を入力
-4. 外部アンテナを使う場合は `Enable external U.FL antenna` を有効化
-5. `Q` で終了 → 保存
-
-### 4. XIAO を USB 接続
-
-1. XIAO を Windows PC に USB-C ケーブルで接続
-2. デバイスマネージャーで COM ポートを確認（例: `COM3`）
-3. `Ctrl+Shift+P` → `ESP-IDF: Select Port to Use` → 該当 COM ポートを選択
-
-> **書き込みモードに入れない場合**  
-> BOOT ボタンを押しながら RST ボタンを押して離す → BOOT を離す
-
-### 5. ビルド＆書き込み
+### 3. ターゲット設定
 
 ```
-Ctrl+Shift+P → ESP-IDF: Build, Flash and Monitor
+Ctrl+Shift+P → ESP-IDF: Set Espressif Device Target → esp32s3
 ```
 
-または Ctrl+Shift+B → タスク一覧から：
-- `ESP-IDF: ビルド / Build` — ビルドのみ
-- `ESP-IDF: フラッシュ（XIAO ESP32-S3）/ Flash` — 書き込み
-- `ESP-IDF: ビルド＋フラッシュ＋モニター` — 全部まとめて実行
-
-書き込み完了後、シリアルモニターに以下が表示されれば成功：
+### 4. menuconfig で WiFi を選択・認証情報を入力
 
 ```
-I (xxxx) main: WiFi driver started (STA mode)
+Ctrl+Shift+P → ESP-IDF: SDK Configuration Editor (Menuconfig)
+→ TCP Socket Server options
+  → Network connection type → WiFi Station (XIAO ESP32-S3 etc.)
+  → WiFi SSID: （あなたのSSID）
+  → WiFi Password: （あなたのパスワード）
+→ XIAO ESP32-S3 options
+  → Enable external U.FL antenna → 外部アンテナ使用時のみ有効化
+```
+
+> `sdkconfig.defaults` に y_air-GL / 88888888 が設定済みのため、
+> 変更不要であればこの手順はスキップできます。
+
+### 5. XIAO を USB 接続して書き込み
+
+1. XIAO を USB-C ケーブルで Windows PC に接続
+2. `Ctrl+Shift+P` → `ESP-IDF: Select Port to Use` → COM ポートを選択
+3. `Ctrl+Shift+P` → `ESP-IDF: Build, Flash and Monitor`
+
+書き込みに失敗する場合（ブートローダーモード）：
+```
+① BOOT ボタンを押したまま
+② RST ボタンを押して離す
+③ BOOT ボタンを離す
+```
+
+### 6. 成功時のシリアルモニター出力
+
+```
 I (xxxx) espnow_server: Connecting to AP: y_air-GL
 I (xxxx) tcp_server: Server listening on port 8080
-I (xxxx) tcp_server: WiFi STA got IP
+I (xxxx) tcp_server: WiFi Got IP Address
 I (xxxx) tcp_server: IP:   192.168.x.xxx
 ```
-
----
-
-## WiFi 設定 / WiFi Configuration
-
-| 設定項目 | デフォルト | 説明 |
-|---|---|---|
-| `WIFI_STA_SSID` | `y_air-GL` | 接続先 WiFi の SSID |
-| `WIFI_STA_PASSWORD` | `88888888` | WiFi パスワード |
-| `XIAO_EXTERNAL_ANTENNA` | 無効 | 外部アンテナ使用時に有効化（GPIO14） |
-| `TCP_SERVER_PORT` | `8080` | RotorHazard との通信ポート |
-
-WiFi 接続後、XIAO は `elrs-netpack.local`（mDNS）でアクセス可能になります。
 
 ---
 
@@ -117,102 +137,59 @@ WiFi 接続後、XIAO は `elrs-netpack.local`（mDNS）でアクセス可能に
 **Raspberry Pi 上で実行**
 
 ```bash
-# 1. リポジトリをクローン（一時フォルダへ）
+# 1. リポジトリをクローン
 git clone -b claude/wifi-espnow-bridge-jptTt --depth 1 \
   https://github.com/yanazoo/elrs-netpack /tmp/elrs-netpack
 
-# 2. データディレクトリ内のプラグインフォルダを確認
-ls ~/rh-data/plugins/
-
-# 3. プラグインを上書きコピー
+# 2. プラグインを上書きコピー（インストール先: ~/rh-data/plugins/）
 cp -r /tmp/elrs-netpack/custom_plugins/netpack_installer \
       ~/rh-data/plugins/
 
-# 4. 一時フォルダを削除
+# 3. 後始末
 rm -rf /tmp/elrs-netpack
 
-# 5. RotorHazard を再起動
-# サービス名の確認（どちらかが active）
-systemctl is-active rotorhazard
-systemctl is-active rh
-
-# 再起動
+# 4. RotorHazard を再起動
 sudo systemctl restart rotorhazard
+# ※ サービス名が "rh" の場合: sudo systemctl restart rh
 ```
 
-### インストール確認
-
-ブラウザで RotorHazard を開き：  
-`Settings` → **「ELRS Netpack（XIAO ESP32-S3）」パネル** が表示されれば OK
+> **インストール先の注意**  
+> 正しくは `~/rh-data/plugins/`、`~/RotorHazard/src/server/plugins/` では**ありません**。
 
 ---
 
-## 動作確認 / Verification
-
-### XIAO 側
-
-シリアルモニターで以下を確認：
-
-```
-✓ WiFi connected
-✓ Server listening on port 8080
-✓ mDNS registered as elrs-netpack.local
-```
-
-### RotorHazard 側
-
-プラグインパネルの **「デバイス接続を確認」** ボタンをクリック：
-
-- `✓ デバイス接続確認: elrs-netpack.local:8080` → 正常
-- `✗ デバイスが見つかりません` → 下記トラブルシューティングを参照
+## 動作確認
 
 ### RotorHazard の接続設定
 
-RotorHazard の設定で ELRS バックパックを有効にし、  
-ホスト: `elrs-netpack.local`（または DHCP で割り当てられた IP）  
-ポート: `8080`  
-を設定してください。
+```
+Settings → ELRS バックパック 一般設定
+  バックパック接続タイプ → SOCKET
+  ELRS Netpack アドレス  → elrs-netpack.local
+                           （または XIAO の IP アドレス）
+  ポート                 → 8080
+```
+
+### プラグインパネルで確認
+
+`Settings` → **「ELRS Netpack（XIAO ESP32-S3）」パネル** →  
+「デバイス接続を確認」ボタン → `✓ デバイス接続確認: elrs-netpack.local:8080`
 
 ---
 
-## トラブルシューティング / Troubleshooting
+## トラブルシューティング
 
-### XIAO が WiFi に繋がらない
-
-- SSID・パスワードが正しいか menuconfig で確認
-- `idf.py -p COMx flash` で再書き込み
-- シリアルモニターのエラーメッセージを確認
-
-### `elrs-netpack.local` が見つからない
-
-- XIAO と Raspberry Pi が**同じ WiFi ネットワーク**に接続されているか確認
-- IP アドレスで直接接続を試す（ルーターの管理画面で XIAO の IP を確認）
-- mDNS が有効でない環境では IP 直指定が必要
-
-### 書き込みモードに入れない（Windows）
-
-1. BOOT ボタンを押し続ける
-2. RST ボタンを 1 秒押して離す
-3. BOOT ボタンを離す
-4. `ESP-IDF: Flash` を実行
-
-### プラグインが RotorHazard に表示されない
-
-```bash
-# ログを確認
-sudo journalctl -u rotorhazard -n 50
-# または
-sudo journalctl -u rh -n 50
-```
-
-`ImportError` が出ている場合は依存パッケージを手動インストール：
-```bash
-pip3 install esptool requests
-```
+| 症状 | 対処 |
+|---|---|
+| WiFi に繋がらない | menuconfig で SSID/パスワードを再確認 → 再書き込み |
+| `elrs-netpack.local` が見つからない | XIAO と RPi が同じネットワークか確認、IP 直指定を試す |
+| 書き込めない | BOOTモードで接続（上記手順参照） |
+| プラグインが表示されない | `sudo journalctl -u rotorhazard -n 50` でエラー確認 |
+| `ImportError: esptool` | `pip3 install esptool requests` を RPi で実行 |
 
 ---
 
-## 関連リンク / Links
+## 関連リンク
 
 - ファームウェアリポジトリ: https://github.com/yanazoo/elrs-netpack
 - XIAO ESP32-S3 ドキュメント: https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/
