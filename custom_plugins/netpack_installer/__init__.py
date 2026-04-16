@@ -143,7 +143,7 @@ class NetpackInstaller:
                     "write_flash",
                     "--flash_mode", "dio",
                     "--flash_freq", "80m",
-                    "--flash_size", "2MB",
+                    "--flash_size", "8MB",   # XIAO ESP32-S3 = 8 MB
                     "0x0",      str(boot.absolute()),
                     "0x10000",  str(firm.absolute()),
                     "0x8000",   str(part.absolute()),
