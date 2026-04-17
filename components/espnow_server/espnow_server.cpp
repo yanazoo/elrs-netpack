@@ -274,12 +274,19 @@ void runESPNOWServer(void *pvParameters)
     ESP_ERROR_CHECK(esp_now_register_send_cb(espnowSendCB));
     ESP_ERROR_CHECK(esp_now_register_recv_cb(espnowRecvCB));
 
-    ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, bindAddress));
-
-    // Register default peer if UID set
+    // Only change MAC if UID is set; all-zero MAC is invalid and breaks WiFi
     if (bindAddress[0] != 0 || bindAddress[1] != 0 || bindAddress[2] != 0 ||
         bindAddress[3] != 0 || bindAddress[4] != 0 || bindAddress[5] != 0)
+    {
+#ifdef CONFIG_TCP_USE_WIFI
+        esp_wifi_disconnect();
+#endif
+        ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, bindAddress));
+#ifdef CONFIG_TCP_USE_WIFI
+        ESP_ERROR_CHECK(esp_wifi_connect());
+#endif
         registerPeer(bindAddress);
+    }
 
     while (1)
     {
