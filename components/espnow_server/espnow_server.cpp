@@ -239,6 +239,25 @@ void runESPNOWServer(void *pvParameters)
 
     nvs_close(bp_mac_handle);
 
+    // NVS が空（全ゼロ）の場合、sdkconfig のデフォルト UID を使用
+#ifdef CONFIG_ESPNOW_DEFAULT_UID_ENABLE
+    bool uid_is_empty = (bindAddress[0] == 0 && bindAddress[1] == 0 && bindAddress[2] == 0 &&
+                         bindAddress[3] == 0 && bindAddress[4] == 0 && bindAddress[5] == 0);
+    if (uid_is_empty)
+    {
+        bindAddress[0] = CONFIG_ESPNOW_DEFAULT_UID_B0 & ~0x01;
+        bindAddress[1] = CONFIG_ESPNOW_DEFAULT_UID_B1;
+        bindAddress[2] = CONFIG_ESPNOW_DEFAULT_UID_B2;
+        bindAddress[3] = CONFIG_ESPNOW_DEFAULT_UID_B3;
+        bindAddress[4] = CONFIG_ESPNOW_DEFAULT_UID_B4;
+        bindAddress[5] = CONFIG_ESPNOW_DEFAULT_UID_B5;
+        memcpy(sendAddress, bindAddress, 6);
+        ESP_LOGI(TAG, "NVS empty: using default UID from sdkconfig: [%d,%d,%d,%d,%d,%d]",
+                 bindAddress[0], bindAddress[1], bindAddress[2],
+                 bindAddress[3], bindAddress[4], bindAddress[5]);
+    }
+#endif
+
     // Start WiFi for ESPNOW
 #ifdef CONFIG_TCP_USE_WIFI
     // WiFi mode: create STA netif so tcp_server can retrieve it via
