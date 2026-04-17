@@ -19,4 +19,38 @@ menu "ESPNOW Server options"
         range 0 14
         help
             The channel on which sending and receiving ESPNOW data.
+
+    config ESPNOW_DEFAULT_UID_ENABLE
+        bool "Use default UID when NVS is empty"
+        default n
+        help
+            NVS に保存済みアドレスがない場合に下記 UID を使用する。
+            RotorHazard が MSP_ELRS_SET_SEND_UID を送信しない場合の回避策。
+
+    if ESPNOW_DEFAULT_UID_ENABLE
+        config ESPNOW_DEFAULT_UID_B0
+            int "UID Byte 0"
+            default 0
+            range 0 255
+        config ESPNOW_DEFAULT_UID_B1
+            int "UID Byte 1"
+            default 0
+            range 0 255
+        config ESPNOW_DEFAULT_UID_B2
+            int "UID Byte 2"
+            default 0
+            range 0 255
+        config ESPNOW_DEFAULT_UID_B3
+            int "UID Byte 3"
+            default 0
+            range 0 255
+        config ESPNOW_DEFAULT_UID_B4
+            int "UID Byte 4"
+            default 0
+            range 0 255
+        config ESPNOW_DEFAULT_UID_B5
+            int "UID Byte 5"
+            default 0
+            range 0 255
+    endif
 endmenu
