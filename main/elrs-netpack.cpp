@@ -9,6 +9,10 @@
 #include "tasks.h"
 #include "msp.h"
 
+#ifdef CONFIG_XIAO_EXTERNAL_ANTENNA
+#include "driver/gpio.h"
+#endif
+
 TaskHandle_t tcpTaskHandle = NULL;
 TaskHandle_t espnowTaskHandle = NULL;
 
@@ -27,6 +31,19 @@ extern "C" void app_main(void)
 
     // Initialize TCP/IP network interface aka the esp-netif (should be called only once in application)
     ESP_ERROR_CHECK(esp_netif_init());
+
+#ifdef CONFIG_XIAO_EXTERNAL_ANTENNA
+    // Drive GPIO14 HIGH to activate the external U.FL antenna on XIAO ESP32-S3 Sense
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << 14),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)14, 1));
+#endif
 
     // Use both cores of the ESP32 for handling interfaces.
     // Assign ESPNOW to Core 0

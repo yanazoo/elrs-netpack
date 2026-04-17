@@ -1,0 +1,12 @@
+menu "XIAO ESP32-S3 options"
+
+    config XIAO_EXTERNAL_ANTENNA
+        bool "Enable external U.FL antenna (XIAO ESP32-S3 Sense, GPIO14)"
+        default n
+        help
+            Drive GPIO14 HIGH to route RF through the external U.FL connector
+            instead of the built-in PCB antenna.
+            Only needed on the XIAO ESP32-S3 Sense variant when an external
+            antenna is physically attached.
+
+endmenu

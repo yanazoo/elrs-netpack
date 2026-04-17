@@ -1,0 +1,20 @@
+{
+  "idf.adapterTargetName": "esp32s3",
+  "idf.flashType": "UART",
+  "idf.openOcdConfigs": [
+    "board/esp32s3-builtin.cfg"
+  ],
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32s3"
+  },
+  "idf.monitorBaudRate": "115200",
+  "C_Cpp.intelliSenseEngine": "default",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "[cpp]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools"
+  },
+  "files.associations": {
+    "*.cpp": "cpp",
+    "*.h": "c"
+  }
+}

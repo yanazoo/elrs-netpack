@@ -240,14 +240,34 @@ void runESPNOWServer(void *pvParameters)
     nvs_close(bp_mac_handle);
 
     // Start WiFi for ESPNOW
+#ifdef CONFIG_TCP_USE_WIFI
+    // WiFi mode: create STA netif so tcp_server can retrieve it via
+    // esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")
+    esp_netif_create_default_wifi_sta();
+#endif
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
     ESP_ERROR_CHECK(esp_wifi_start());
+
+#ifdef CONFIG_TCP_USE_WIFI
+    // WiFi mode: connect to AP; ESPNow channel follows the AP automatically.
+    wifi_config_t sta_config = {};
+    strncpy((char *)sta_config.sta.ssid,     CONFIG_TCP_WIFI_SSID,     sizeof(sta_config.sta.ssid));
+    strncpy((char *)sta_config.sta.password, CONFIG_TCP_WIFI_PASSWORD, sizeof(sta_config.sta.password));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+    ESP_ERROR_CHECK(esp_wifi_connect());
+    ESP_LOGI(TAG, "Connecting to AP: %s", CONFIG_TCP_WIFI_SSID);
+#else
+    // Ethernet mode: no AP to follow, fix ESPNow channel explicitly.
     ESP_ERROR_CHECK(esp_wifi_set_channel(CONFIG_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
-    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
+#endif
+
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA,
+        WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
 
     // Start ESPNOW
     ESP_ERROR_CHECK(esp_now_init());
@@ -345,7 +365,14 @@ void runESPNOWServer(void *pvParameters)
                         memcpy(sendAddress, bindAddress, 6);
                     }
 
+#ifdef CONFIG_TCP_USE_WIFI
+                    // WiFi mode: disconnect before changing MAC, then reconnect.
+                    esp_wifi_disconnect();
+#endif
                     ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, sendAddress));
+#ifdef CONFIG_TCP_USE_WIFI
+                    ESP_ERROR_CHECK(esp_wifi_connect());
+#endif
 
                     if (sendAddress[0] != 0 || sendAddress[1] != 0 || sendAddress[2] != 0 ||
                         sendAddress[3] != 0 || sendAddress[4] != 0 || sendAddress[5] != 0)

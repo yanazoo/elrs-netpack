@@ -6,16 +6,19 @@
 #include "freertos/ringbuf.h"
 #include "freertos/task.h"
 #include "esp_netif.h"
-#include "esp_netif_net_stack.h"
-#include "esp_eth.h"
 #include "esp_event.h"
 #include "esp_log.h"
-#include "ethernet_init.h"
 #include "lwip/sockets.h"
-#include "dhcpserver/dhcpserver_options.h"
 #include "tasks.h"
 #include "msp.h"
 #include "mdns.h"
+
+#ifdef CONFIG_TCP_USE_ETHERNET
+#include "esp_netif_net_stack.h"
+#include "esp_eth.h"
+#include "ethernet_init.h"
+#include "dhcpserver/dhcpserver_options.h"
+#endif
 
 #define INVALID_SOCKET -1
 #define LISTENER_MAX_QUEUE 1
@@ -40,7 +43,7 @@ static fd_set ready;
 
 static bool mdns_setup = false;
 
-static void initialize_mdns(esp_netif_t *eth_netif)
+static void initialize_mdns(esp_netif_t *netif)
 {
     ESP_ERROR_CHECK(mdns_init());
     ESP_ERROR_CHECK(mdns_hostname_set("elrs-netpack"));
@@ -52,30 +55,33 @@ static void initialize_mdns(esp_netif_t *eth_netif)
 
     ESP_ERROR_CHECK(mdns_service_add("ExpressLRS Backpack", "_elrs-backpack", "_tcp", CONFIG_TCP_SERVER_PORT, serviceTxtData, 3));
 
-    ESP_ERROR_CHECK(mdns_register_netif(eth_netif));
-    ESP_ERROR_CHECK(mdns_netif_action(eth_netif, MDNS_EVENT_ENABLE_IP4));
-    ESP_ERROR_CHECK(mdns_netif_action(eth_netif, MDNS_EVENT_ANNOUNCE_IP4));
-    ESP_ERROR_CHECK(mdns_netif_action(eth_netif, MDNS_EVENT_IP4_REVERSE_LOOKUP));
+    ESP_ERROR_CHECK(mdns_register_netif(netif));
+    ESP_ERROR_CHECK(mdns_netif_action(netif, MDNS_EVENT_ENABLE_IP4));
+    ESP_ERROR_CHECK(mdns_netif_action(netif, MDNS_EVENT_ANNOUNCE_IP4));
+    ESP_ERROR_CHECK(mdns_netif_action(netif, MDNS_EVENT_IP4_REVERSE_LOOKUP));
 
     mdns_setup = true;
 }
 
-/* Event handler for IP_EVENT_ETH_GOT_IP */
 static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *data)
 {
-    esp_netif_t *eth_netif = (esp_netif_t *)arg;
+    esp_netif_t *netif = (esp_netif_t *)arg;
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
     const esp_netif_ip_info_t *ip_info = &event->ip_info;
 
+#ifdef CONFIG_TCP_USE_ETHERNET
     ESP_LOGI(TAG, "Ethernet Got IP Address");
+#else
+    ESP_LOGI(TAG, "WiFi Got IP Address");
+#endif
     ESP_LOGI(TAG, "~~~~~~~~~~~");
-    ESP_LOGI(TAG, "ETHIP:" IPSTR, IP2STR(&ip_info->ip));
-    ESP_LOGI(TAG, "ETHMASK:" IPSTR, IP2STR(&ip_info->netmask));
-    ESP_LOGI(TAG, "ETHGW:" IPSTR, IP2STR(&ip_info->gw));
+    ESP_LOGI(TAG, "IP:"   IPSTR, IP2STR(&ip_info->ip));
+    ESP_LOGI(TAG, "MASK:" IPSTR, IP2STR(&ip_info->netmask));
+    ESP_LOGI(TAG, "GW:"   IPSTR, IP2STR(&ip_info->gw));
     ESP_LOGI(TAG, "~~~~~~~~~~~");
 
     if (!mdns_setup)
-        initialize_mdns(eth_netif);
+        initialize_mdns(netif);
 }
 
 static void tcp_server_sender(void *pvParameters)
@@ -83,7 +89,6 @@ static void tcp_server_sender(void *pvParameters)
     MSP msp;
 
     // Send any processed data to active connections
-    // Use the queue set to check for any new data instead of using timeout to recieve
     while (1)
     {
         QueueSetMemberHandle_t member = xQueueSelectFromSet(queue_set, portMAX_DELAY);
@@ -95,7 +100,6 @@ static void tcp_server_sender(void *pvParameters)
             {
                 ESP_LOGD(TAG, "Send task taken semaphore");
 
-                // Timeout for receiving from buffer doesn't matter due to checking the queue set
                 size_t item_size;
                 mspPacket_t *packet = (mspPacket_t *)xRingbufferReceive(xRingReceivedEspnow, &item_size, 0);
 
@@ -117,7 +121,6 @@ static void tcp_server_sender(void *pvParameters)
                     }
                 }
                 else
-
                     ESP_LOGE(TAG, "Failed to convert packet from buffer");
 
                 vRingbufferReturnItem(xRingReceivedEspnow, (void *)packet);
@@ -147,7 +150,10 @@ void run_tcp_server(void *pvParameters)
     else
         ESP_LOGE(TAG, "Semaphore does not exist");
 
-    // Initialize Ethernet driver
+    // ----------------------------------------------------------------
+    // Network interface initialisation (Ethernet or WiFi)
+    // ----------------------------------------------------------------
+#ifdef CONFIG_TCP_USE_ETHERNET
     uint8_t eth_port_cnt = 0;
     esp_eth_handle_t *eth_handles;
     ESP_ERROR_CHECK(ethernet_init_all(&eth_handles, &eth_port_cnt));
@@ -159,12 +165,10 @@ void run_tcp_server(void *pvParameters)
 
     if (eth_port_cnt == 1)
     {
-        // Use default config when using one interface
         eth_netif_cfg = *(ESP_NETIF_BASE_DEFAULT_ETH);
     }
     else
     {
-        // Set config to support multiple interfaces
         eth_netif_cfg = (esp_netif_inherent_config_t)ESP_NETIF_INHERENT_DEFAULT_ETH();
     }
     cfg = (esp_netif_config_t){
@@ -175,21 +179,27 @@ void run_tcp_server(void *pvParameters)
     eth_netif_cfg.if_key = if_key_str;
     eth_netif_cfg.if_desc = if_desc_str;
     eth_netif_cfg.route_prio -= 0 * 5;
-    esp_netif_t *eth_netif = esp_netif_new(&cfg);
+    esp_netif_t *netif = esp_netif_new(&cfg);
 
-    // Attach Ethernet driver to TCP/IP stack
-    ESP_ERROR_CHECK(esp_netif_attach(eth_netif, esp_eth_new_netif_glue(eth_handles[0])));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, got_ip_event_handler, eth_netif));
-    // Start Ethernet driver state machine
+    ESP_ERROR_CHECK(esp_netif_attach(netif, esp_eth_new_netif_glue(eth_handles[0])));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, got_ip_event_handler, netif));
     for (int i = 0; i < eth_port_cnt; i++)
     {
         ESP_ERROR_CHECK(esp_eth_start(eth_handles[i]));
     }
 
+#else // CONFIG_TCP_USE_WIFI
+    // WiFi STA netif was created by espnow_server before this task started.
+    // Retrieve it by its well-known interface key and register for IP events.
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, got_ip_event_handler, netif));
+
+#endif // CONFIG_TCP_USE_ETHERNET
+
     char *rxbuffer = NULL;
     char *txbuffer = NULL;
 
-    // Initialize Berkeley socket which will listen on port TCP_SERVER_PORT for transmission from client
+    // Initialize Berkeley socket which will listen on port TCP_SERVER_PORT
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0)
     {
@@ -218,7 +228,6 @@ void run_tcp_server(void *pvParameters)
         goto err;
     }
 
-    // Listen and wait for transmission to come
     if (listen(server_fd, LISTENER_MAX_QUEUE) < 0)
     {
         ESP_LOGE(TAG, "Failed to listen on socket: errno %d", errno);
@@ -239,13 +248,11 @@ void run_tcp_server(void *pvParameters)
         goto err;
     }
 
-    // Initialize connections array
     for (int i = 0; i < LISTENER_MAX_QUEUE; i++)
     {
         connections[i].fd = INVALID_SOCKET;
     }
 
-    // Create TCP send task with lower priority than manager
     TaskHandle_t tcpTaskHandle;
     xTaskCreatePinnedToCore(tcp_server_sender, "SockerSenderTask", 4096, NULL, 8, &tcpTaskHandle, 1);
 
@@ -255,11 +262,9 @@ void run_tcp_server(void *pvParameters)
         {
             ESP_LOGD(TAG, "Manager has taken semaphore");
 
-            // Clear and add server to set
             FD_ZERO(&ready);
             FD_SET(server_fd, &ready);
 
-            // Add client(s) to set
             for (int i = 0; i < active_connections_count; i++)
             {
                 int conn_fd = connections[i].fd;
@@ -282,7 +287,6 @@ void run_tcp_server(void *pvParameters)
             continue;
         }
 
-        // Wait for activity
         int activity = select(max_fd + 1, &ready, NULL, NULL, NULL);
         if (activity < 0)
         {
@@ -296,10 +300,8 @@ void run_tcp_server(void *pvParameters)
             continue;
         }
 
-        // Check if new connections are pending
         if (FD_ISSET(server_fd, &ready) && active_connections_count < LISTENER_MAX_QUEUE)
         {
-            // Accept new connection
             struct sockaddr_in *current_address_ptr = &connections[active_connections_count].address;
             int new_fd = accept(server_fd, (struct sockaddr *)current_address_ptr, &addrlen);
 
@@ -318,27 +320,23 @@ void run_tcp_server(void *pvParameters)
             }
         }
 
-        // Clean up disconnected clients and compact the array
         for (int i = 0; i < active_connections_count; i++)
         {
             if (connections[i].fd == INVALID_SOCKET)
             {
-                // Move the last connection to this slot and reduce count
                 if (i < active_connections_count - 1)
                 {
                     connections[i] = connections[active_connections_count - 1];
                 }
                 active_connections_count--;
-                i--; // Recheck this position
+                i--;
             }
         }
 
-        // Check existing connections for data
         for (int i = 0; i < active_connections_count; i++)
         {
             int fd = connections[i].fd;
 
-            // Check if client sent message
             if (fd > 0 && FD_ISSET(fd, &ready))
             {
                 memset(rxbuffer, 0, SOCKET_MAX_LENGTH);
@@ -352,7 +350,6 @@ void run_tcp_server(void *pvParameters)
                 }
                 else if (n == 0)
                 {
-                    // Connection closed by client
                     ESP_LOGI(TAG, "Client disconnected, socket fd: %d", fd);
                     close(fd);
                     connections[i].fd = INVALID_SOCKET;
