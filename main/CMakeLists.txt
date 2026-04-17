@@ -6,5 +6,5 @@ endif()
 idf_component_register(
     SRCS "elrs-netpack.cpp"
     INCLUDE_DIRS "."
-    REQUIRES esp_netif esp_event ${EXTRA_REQUIRES}
+    REQUIRES esp_netif esp_event esp_ringbuf ${EXTRA_REQUIRES}
 )
