@@ -1,30 +1,27 @@
-# sdkconfig.defaults – XIAO ESP32-S3 (WiFi STA) 向けデフォルト設定
-# "idf.py build" 実行時に sdkconfig に存在しない項目だけ適用されます。
-# Default configuration for XIAO ESP32-S3 (WiFi STA variant).
+# sdkconfig.defaults - XIAO ESP32-S3 (WiFi STA) default configuration
 
-# --- ターゲット / Target ---
+# --- Target ---
 CONFIG_IDF_TARGET="esp32s3"
 
-# --- 接続タイプ: WiFi を選択 / Connection type: WiFi ---
+# --- Connection type: WiFi ---
 CONFIG_TCP_USE_WIFI=y
 
-# --- WiFi 接続先 / WiFi credentials ---
+# --- WiFi credentials ---
 CONFIG_TCP_WIFI_SSID="y_air-GL"
 CONFIG_TCP_WIFI_PASSWORD="88888888"
 
-# --- 外部アンテナ / External antenna (Sense variant only) ---
-# CONFIG_XIAO_EXTERNAL_ANTENNA=y   # 外部アンテナを使う場合はコメントを外す
+# --- External antenna (Sense variant only) ---
+# CONFIG_XIAO_EXTERNAL_ANTENNA=y
 
-# --- TCP サーバーポート / TCP server port ---
+# --- TCP server port ---
 CONFIG_TCP_SERVER_PORT=8080
 
-# --- ESP-NOW（Ethernet モード時のチャンネル固定値）---
-# WiFi モードでは AP のチャンネルに自動追従するため不要
+# --- ESP-NOW (channel fixed value for Ethernet mode) ---
 CONFIG_ESPNOW_CHANNEL=1
 CONFIG_ESPNOW_MAX_SEND_ATTEMPTS=5
 CONFIG_ESPNOW_SEND_DELAY=0
 
-# --- Flash サイズ / Flash size (XIAO ESP32-S3 = 8MB) ---
+# --- Flash size (XIAO ESP32-S3 = 8MB) ---
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
 
