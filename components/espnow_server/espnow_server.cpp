@@ -63,7 +63,7 @@ static void registerPeer(uint8_t *address)
     esp_now_peer_info_t peerInfo;
     memset(&peerInfo, 0, sizeof(peerInfo));
     memcpy(peerInfo.peer_addr, address, 6);
-    peerInfo.channel = 0;
+    peerInfo.channel = CONFIG_ESPNOW_CHANNEL;
     peerInfo.encrypt = false;
     if (esp_now_add_peer(&peerInfo) != ESP_OK)
     {
