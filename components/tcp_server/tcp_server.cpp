@@ -55,7 +55,10 @@ static void initialize_mdns(esp_netif_t *netif)
 
     ESP_ERROR_CHECK(mdns_service_add("ExpressLRS Backpack", "_elrs-backpack", "_tcp", CONFIG_TCP_SERVER_PORT, serviceTxtData, 3));
 
-    ESP_ERROR_CHECK(mdns_register_netif(netif));
+    esp_err_t mdns_err = mdns_register_netif(netif);
+    if (mdns_err != ESP_OK && mdns_err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(mdns_err);
+    }
     ESP_ERROR_CHECK(mdns_netif_action(netif, MDNS_EVENT_ENABLE_IP4));
     ESP_ERROR_CHECK(mdns_netif_action(netif, MDNS_EVENT_ANNOUNCE_IP4));
     ESP_ERROR_CHECK(mdns_netif_action(netif, MDNS_EVENT_IP4_REVERSE_LOOKUP));
