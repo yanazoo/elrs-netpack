@@ -5,6 +5,7 @@
 #include "freertos/queue.h"
 #include "freertos/ringbuf.h"
 #include "freertos/task.h"
+#include "esp_err.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -56,7 +57,9 @@ static void initialize_mdns(esp_netif_t *netif)
     ESP_ERROR_CHECK(mdns_service_add("ExpressLRS Backpack", "_elrs-backpack", "_tcp", CONFIG_TCP_SERVER_PORT, serviceTxtData, 3));
 
     esp_err_t mdns_err = mdns_register_netif(netif);
-    if (mdns_err != ESP_OK && mdns_err != ESP_ERR_INVALID_STATE) {
+    if (mdns_err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "mdns netif already registered (auto-registered by mdns)");
+    } else {
         ESP_ERROR_CHECK(mdns_err);
     }
     ESP_ERROR_CHECK(mdns_netif_action(netif, MDNS_EVENT_ENABLE_IP4));
