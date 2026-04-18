@@ -396,6 +396,14 @@ void runESPNOWServer(void *pvParameters)
                     esp_wifi_disconnect();
 #endif
                     ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, sendAddress));
+
+                    // esp_wifi_set_mac() triggers a WiFi stack restart which clears the
+                    // ESP-NOW peer list. Re-initialize ESP-NOW before re-registering peers.
+                    esp_now_deinit();
+                    ESP_ERROR_CHECK(esp_now_init());
+                    ESP_ERROR_CHECK(esp_now_register_send_cb(espnowSendCB));
+                    ESP_ERROR_CHECK(esp_now_register_recv_cb(espnowRecvCB));
+
 #ifdef CONFIG_TCP_USE_WIFI
                     ESP_ERROR_CHECK(esp_wifi_connect());
 #endif
