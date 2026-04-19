@@ -1,5 +1,0 @@
-idf_component_register(
-    SRCS "espnow_server.cpp"
-    INCLUDE_DIRS "include"
-    REQUIRES esp_app_format esp_netif esp_wifi esp_event esp_ringbuf driver tasks msp
-)
