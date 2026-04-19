@@ -1,445 +1,116 @@
+// UART bridge: ESP32-S3 handles WiFi/TCP; ESP-NOW is delegated to an external
+// ESP32 Wrover-E connected via UART (XIAO D0/D1 ↔ ESP32 GPIO26/27).
 #include <stdio.h>
-#include <stdlib.h>
 #include <cstring>
 #include "espnow_server.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
 #include "esp_app_desc.h"
-#include "nvs_flash.h"
+#include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
-#include "esp_mac.h"
-#include "esp_now.h"
+#include "driver/uart.h"
+#include "driver/gpio.h"
 #include "tasks.h"
 #include "msptypes.h"
 #include "msp.h"
 
-#define NO_BINDING_TIMEOUT 120000 / portTICK_PERIOD_MS
-#define STORAGE_NAMESPACE "netpack"
-#define STORAGE_MAC_KEY "bp_mac_addr"
+#define UART_PORT_NUM   UART_NUM_1
+#define UART_BAUD_RATE  115200
+#define UART_TX_PIN     GPIO_NUM_1   // XIAO D0 → ESP32 GPIO26
+#define UART_RX_PIN     GPIO_NUM_2   // XIAO D1 ← ESP32 GPIO27
+#define UART_BUF_SIZE   512
 
-static const char *TAG = "espnow_server";
-
-const esp_app_desc_t *description = esp_app_get_description();
-const TickType_t espnowDelay = CONFIG_ESPNOW_SEND_DELAY / portTICK_PERIOD_MS;
-
-static uint8_t bindAddress[6];
-static uint8_t sendAddress[6];
-static nvs_handle_t bp_mac_handle;
-
-static TaskHandle_t espnowTaskHandle = NULL;
-static TaskHandle_t bindTaskHandle = NULL;
-static RingbufHandle_t xRingReceivedEspnow = NULL;
-
-static bool isBinding = false;
-
-static void sendInProgressResponse()
-{
-    mspPacket_t out;
-    const uint8_t *response = (const uint8_t *)"P";
-    out.reset();
-    out.makeResponse();
-    out.function = MSP_ELRS_BACKPACK_SET_MODE;
-    for (uint32_t i = 0; i < 1; i++)
-    {
-        out.addByte(response[i]);
-    }
-
-    if (xRingbufferSend(xRingReceivedEspnow, &out, sizeof(mspPacket_t), pdMS_TO_TICKS(1000)) == pdTRUE)
-        ESP_LOGI(TAG, "Added progress response to ring buffer");
-    else
-        ESP_LOGE(TAG, "Failed to add item progress response to ring buffer");
-}
-
-static void runBindTask(void *pvParameters)
-{
-    vTaskDelay(NO_BINDING_TIMEOUT);
-    isBinding = false;
-}
-
-static void registerPeer(uint8_t *address)
-{
-    esp_now_peer_info_t peerInfo;
-    memset(&peerInfo, 0, sizeof(peerInfo));
-    memcpy(peerInfo.peer_addr, address, 6);
-    peerInfo.channel = CONFIG_ESPNOW_CHANNEL;
-    peerInfo.encrypt = false;
-    if (esp_now_add_peer(&peerInfo) != ESP_OK)
-    {
-        ESP_LOGE(TAG, "ESP-NOW failed to add peer");
-    }
-}
-
-static int sendMSPViaEspnow(mspPacket_t *packet)
-{
-    MSP msp;
-    int esp_err = -1;
-    uint8_t packetSize = msp.getTotalPacketSize(packet);
-    uint8_t nowDataOutput[packetSize];
-
-    uint8_t result = msp.convertToByteArray(packet, nowDataOutput);
-
-    if (!result)
-    {
-        ESP_LOGE(TAG, "Packet could not be converted to array");
-        return esp_err;
-    }
-
-    esp_now_peer_num_t pn;
-    esp_now_get_peer_num(&pn);
-
-    esp_err = esp_now_send(sendAddress, (uint8_t *)&nowDataOutput, packetSize);
-
-    ESP_LOGI(TAG, "Sent ESPNOW message");
-    return esp_err;
-}
-
-static void espnowSendCB(const uint8_t *mac_addr, esp_now_send_status_t status)
-{
-    if (status == ESP_NOW_SEND_SUCCESS)
-        xTaskNotify(espnowTaskHandle, (uint32_t)1, eSetValueWithOverwrite);
-    else
-        xTaskNotify(espnowTaskHandle, (uint32_t)0, eSetValueWithOverwrite);
-}
-
-static void espnowRecvCB(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
-{
-    MSP msp;
-    esp_now_peer_info_t peerInfo;
-    for (int i = 0; i < len; i++)
-    {
-        if (msp.processReceivedByte(data[i]))
-        {
-            mspPacket_t *packet = msp.getReceivedPacket();
-            switch (packet->function)
-            {
-            case MSP_ELRS_BIND:
-            {
-                if (!isBinding)
-                    break;
-
-                if (bindTaskHandle != NULL)
-                {
-                    vTaskDelete(bindTaskHandle);
-                    bindTaskHandle = NULL;
-                }
-
-                isBinding = false;
-
-                uint8_t recievedAddress[6];
-                for (int i = 0; i < 6; i++)
-                {
-                    recievedAddress[i] = packet->payload[i];
-                }
-
-                recievedAddress[0] = recievedAddress[0] & ~0x01;
-
-                if (recievedAddress[0] == 0 && recievedAddress[1] == 0 && recievedAddress[2] == 0 &&
-                    recievedAddress[3] == 0 && recievedAddress[4] == 0 && recievedAddress[5] == 0)
-                {
-                    ESP_LOGW(TAG, "Preventing UID from being saved to default value");
-                    break;
-                }
-
-                if (nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &bp_mac_handle) == ESP_OK)
-                {
-                    if (nvs_set_blob(bp_mac_handle, STORAGE_MAC_KEY, &recievedAddress, sizeof(recievedAddress)) == ESP_OK)
-                    {
-                        if (nvs_commit(bp_mac_handle) == ESP_OK)
-                            ESP_LOGI(TAG, "UID saved to nvs");
-                        else
-                            ESP_LOGE(TAG, "Failed to commit nvs data");
-                    }
-                    else
-                        ESP_LOGE(TAG, "Failed to write MAC address to nvs");
-                }
-                else
-                    ESP_LOGE(TAG, "Error opening NVS handle!");
-
-                nvs_close(bp_mac_handle);
-
-                if (bindAddress[0] == sendAddress[0] && bindAddress[1] == sendAddress[1] && bindAddress[2] == sendAddress[2] &&
-                    bindAddress[3] == sendAddress[3] && bindAddress[4] == sendAddress[4] && bindAddress[5] == sendAddress[5])
-                {
-                    memset(&sendAddress, 0, sizeof(sendAddress));
-                    memcpy(sendAddress, recievedAddress, 6);
-
-                    if (esp_now_fetch_peer(true, &peerInfo) == ESP_OK)
-                        esp_now_del_peer(peerInfo.peer_addr);
-
-                    registerPeer(sendAddress);
-                }
-
-                memset(&bindAddress, 0, sizeof(bindAddress));
-                memcpy(bindAddress, recievedAddress, 6);
-
-                ESP_LOGI(TAG, "Backpack UID set to: [%d,%d,%d,%d,%d,%d]", bindAddress[0], bindAddress[1],
-                         bindAddress[2], bindAddress[3], bindAddress[4], bindAddress[5]);
-
-                break;
-            }
-            case MSP_ELRS_BACKPACK_SET_RECORDING_STATE:
-            {
-                if (xRingbufferSend(xRingReceivedEspnow, msp.getReceivedPacket(), sizeof(mspPacket_t), pdMS_TO_TICKS(1000)) == pdTRUE)
-                    ESP_LOGI(TAG, "Recording state change added to buffer");
-                else
-                    ESP_LOGE(TAG, "Failed to add recieved ESPNOW data to ring buffer");
-            }
-            }
-
-            msp.markPacketReceived();
-        }
-    }
-}
+static const char *TAG = "uart_bridge";
 
 void runESPNOWServer(void *pvParameters)
 {
-
     TaskBufferParams *buffers = (TaskBufferParams *)pvParameters;
-    xRingReceivedEspnow = buffers->write;
+    const esp_app_desc_t *description = esp_app_get_description();
 
-    espnowTaskHandle = xTaskGetCurrentTaskHandle();
+    // UART to ESP32 Wrover-E (ESP-NOW bridge)
+    uart_config_t uart_config = {
+        .baud_rate  = UART_BAUD_RATE,
+        .data_bits  = UART_DATA_8_BITS,
+        .parity     = UART_PARITY_DISABLE,
+        .stop_bits  = UART_STOP_BITS_1,
+        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    ESP_ERROR_CHECK(uart_driver_install(UART_PORT_NUM, UART_BUF_SIZE * 2, 0, 0, NULL, 0));
+    ESP_ERROR_CHECK(uart_param_config(UART_PORT_NUM, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(UART_PORT_NUM, UART_TX_PIN, UART_RX_PIN,
+                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_LOGI(TAG, "UART bridge ready (TX=GPIO%d RX=GPIO%d)", UART_TX_PIN, UART_RX_PIN);
 
-    uint8_t sendAttempt = 0;
-    uint32_t sendSuccess = 0;
-    int sendStatus = -1;
-    MSP msp;
-
-    esp_err_t err;
-
-    // Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-    {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    // Get Backpack MAC address from NVS
-    err = nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &bp_mac_handle);
-    if (err == ESP_OK)
-    {
-        uint8_t mac_addr[6];
-        size_t size = sizeof(mac_addr);
-        err = nvs_get_blob(bp_mac_handle, STORAGE_MAC_KEY, bindAddress, &size);
-        if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND)
-            ESP_LOGW(TAG, "Unable to retreive mac address from nvs");
-        else
-        {
-            memcpy(sendAddress, bindAddress, 6);
-            bindAddress[0] = bindAddress[0] & ~0x01;
-            ESP_LOGI(TAG, "Backpack UID: [%d,%d,%d,%d,%d,%d]", bindAddress[0], bindAddress[1],
-                     bindAddress[2], bindAddress[3], bindAddress[4], bindAddress[5]);
-        }
-    }
-    else
-        ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
-
-    nvs_close(bp_mac_handle);
-
-    // NVS が空（全ゼロ）の場合、sdkconfig のデフォルト UID を使用
-#ifdef CONFIG_ESPNOW_DEFAULT_UID_ENABLE
-    bool uid_is_empty = (bindAddress[0] == 0 && bindAddress[1] == 0 && bindAddress[2] == 0 &&
-                         bindAddress[3] == 0 && bindAddress[4] == 0 && bindAddress[5] == 0);
-    if (uid_is_empty)
-    {
-        bindAddress[0] = CONFIG_ESPNOW_DEFAULT_UID_B0 & ~0x01;
-        bindAddress[1] = CONFIG_ESPNOW_DEFAULT_UID_B1;
-        bindAddress[2] = CONFIG_ESPNOW_DEFAULT_UID_B2;
-        bindAddress[3] = CONFIG_ESPNOW_DEFAULT_UID_B3;
-        bindAddress[4] = CONFIG_ESPNOW_DEFAULT_UID_B4;
-        bindAddress[5] = CONFIG_ESPNOW_DEFAULT_UID_B5;
-        memcpy(sendAddress, bindAddress, 6);
-        ESP_LOGI(TAG, "NVS empty: using default UID from sdkconfig: [%d,%d,%d,%d,%d,%d]",
-                 bindAddress[0], bindAddress[1], bindAddress[2],
-                 bindAddress[3], bindAddress[4], bindAddress[5]);
-    }
-#endif
-
-    // Start WiFi for ESPNOW
-#ifdef CONFIG_TCP_USE_WIFI
-    // WiFi mode: create STA netif so tcp_server can retrieve it via
-    // esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")
+    // WiFi init — same STA setup as before (needed for TCP server)
     esp_netif_create_default_wifi_sta();
-#endif
-
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-
     ESP_ERROR_CHECK(esp_wifi_start());
 
-#ifdef CONFIG_TCP_USE_WIFI
-    // WiFi mode: connect to AP; ESPNow channel follows the AP automatically.
     wifi_config_t sta_config = {};
     strncpy((char *)sta_config.sta.ssid,     CONFIG_TCP_WIFI_SSID,     sizeof(sta_config.sta.ssid));
     strncpy((char *)sta_config.sta.password, CONFIG_TCP_WIFI_PASSWORD, sizeof(sta_config.sta.password));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
     ESP_ERROR_CHECK(esp_wifi_connect());
     ESP_LOGI(TAG, "Connecting to AP: %s", CONFIG_TCP_WIFI_SSID);
-#else
-    // Ethernet mode: no AP to follow, fix ESPNow channel explicitly.
-    ESP_ERROR_CHECK(esp_wifi_set_channel(CONFIG_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
-#endif
 
-    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA,
-        WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
-
-    // Start ESPNOW
-    ESP_ERROR_CHECK(esp_now_init());
-    ESP_ERROR_CHECK(esp_now_register_send_cb(espnowSendCB));
-    ESP_ERROR_CHECK(esp_now_register_recv_cb(espnowRecvCB));
-
-    // Only change MAC if UID is set; all-zero MAC is invalid and breaks WiFi
-    if (bindAddress[0] != 0 || bindAddress[1] != 0 || bindAddress[2] != 0 ||
-        bindAddress[3] != 0 || bindAddress[4] != 0 || bindAddress[5] != 0)
-    {
-#ifdef CONFIG_TCP_USE_WIFI
-        esp_wifi_disconnect();
-#endif
-        ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, bindAddress));
-#ifdef CONFIG_TCP_USE_WIFI
-        ESP_ERROR_CHECK(esp_wifi_connect());
-#endif
-        registerPeer(bindAddress);
-    }
+    MSP msp_tx;  // TCP → UART serialization
+    MSP msp_rx;  // UART → TCP parsing
 
     while (1)
     {
-        // Send data from incoming buffer over ESPNOW
+        // TCP → UART: forward MSP packets from RotorHazard to ESP32
         size_t item_size;
-        mspPacket_t *packet = (mspPacket_t *)xRingbufferReceive(buffers->read, &item_size, portMAX_DELAY);
+        mspPacket_t *packet = (mspPacket_t *)xRingbufferReceive(buffers->read, &item_size, 0);
         if (packet != NULL)
         {
-            uint8_t packetSize = msp.getTotalPacketSize(packet);
-            uint8_t nowDataOutput[packetSize];
-            uint8_t result = msp.convertToByteArray(packet, nowDataOutput);
-
-            if (result)
+            if (packet->function == MSP_ELRS_GET_BACKPACK_VERSION)
             {
-                switch (packet->function)
+                // Handle locally — return this firmware's version string
+                mspPacket_t out;
+                out.reset();
+                out.makeResponse();
+                out.function = MSP_ELRS_GET_BACKPACK_VERSION;
+                for (size_t i = 0; i < sizeof(description->version); i++)
+                    out.addByte(description->version[i]);
+                if (xRingbufferSend(buffers->write, &out, sizeof(mspPacket_t),
+                                    pdMS_TO_TICKS(1000)) != pdTRUE)
+                    ESP_LOGE(TAG, "Failed to queue version response");
+            }
+            else
+            {
+                // Forward raw MSP bytes to ESP32 over UART
+                uint8_t packetSize = msp_tx.getTotalPacketSize(packet);
+                uint8_t bytes[packetSize];
+                if (msp_tx.convertToByteArray(packet, bytes))
                 {
-                case MSP_ELRS_GET_BACKPACK_VERSION:
-                {
-                    ESP_LOGI(TAG, "Processing MSP_ELRS_GET_BACKPACK_VERSION...");
-
-                    mspPacket_t out;
-                    out.reset();
-                    out.makeResponse();
-                    out.function = MSP_ELRS_GET_BACKPACK_VERSION;
-                    for (size_t i = 0; i < sizeof(description->version); i++)
-                    {
-                        out.addByte(description->version[i]);
-                    }
-
-                    if (xRingbufferSend(xRingReceivedEspnow, &out, sizeof(mspPacket_t), pdMS_TO_TICKS(1000)) == pdTRUE)
-                        ESP_LOGI(TAG, "Added device version to ring buffer");
-                    else
-                        ESP_LOGE(TAG, "Failed to add item to ring buffer");
-
-                    break;
-                }
-                case MSP_ELRS_BACKPACK_SET_MODE:
-                {
-                    if (packet->payloadSize == 1)
-                    {
-                        if (packet->payload[0] == 'B')
-                        {
-                            ESP_LOGI(TAG, "Enter binding mode...");
-                            isBinding = true;
-                        }
-                        if (bindTaskHandle != NULL)
-                        {
-                            vTaskDelete(bindTaskHandle);
-                            bindTaskHandle = NULL;
-                        }
-
-                        xTaskCreate(runBindTask, "BindTask", 4096, NULL, 10, &bindTaskHandle);
-                        sendInProgressResponse();
-                    }
-                    break;
-                }
-                case MSP_ELRS_SET_SEND_UID:
-                {
-                    ESP_LOGI(TAG, "Processing MSP_ELRS_SET_SEND_UID...");
-                    uint8_t mode = packet->readByte();
-
-                    // Unregister current peer
-                    esp_now_del_peer(sendAddress);
-                    memset(&sendAddress, 0, sizeof(sendAddress));
-
-                    // Set target send address
-                    if (mode == 0x01)
-                    {
-                        uint8_t receivedAddress[6];
-                        receivedAddress[0] = packet->readByte();
-                        receivedAddress[1] = packet->readByte();
-                        receivedAddress[2] = packet->readByte();
-                        receivedAddress[3] = packet->readByte();
-                        receivedAddress[4] = packet->readByte();
-                        receivedAddress[5] = packet->readByte();
-
-                        ESP_LOGI(TAG, "Setting to recieved address");
-                        memcpy(sendAddress, receivedAddress, 6);
-                    }
-                    else
-                    {
-                        ESP_LOGI(TAG, "Resetting to default address");
-                        memcpy(sendAddress, bindAddress, 6);
-                    }
-
-#ifdef CONFIG_TCP_USE_WIFI
-                    // WiFi mode: disconnect before changing MAC, then reconnect.
-                    esp_wifi_disconnect();
-#endif
-                    ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, sendAddress));
-
-                    // esp_wifi_set_mac() triggers a WiFi stack restart which clears the
-                    // ESP-NOW peer list. Re-initialize ESP-NOW before re-registering peers.
-                    esp_now_deinit();
-                    ESP_ERROR_CHECK(esp_now_init());
-                    ESP_ERROR_CHECK(esp_now_register_send_cb(espnowSendCB));
-                    ESP_ERROR_CHECK(esp_now_register_recv_cb(espnowRecvCB));
-
-#ifdef CONFIG_TCP_USE_WIFI
-                    ESP_ERROR_CHECK(esp_wifi_connect());
-#endif
-
-                    if (sendAddress[0] != 0 || sendAddress[1] != 0 || sendAddress[2] != 0 ||
-                        sendAddress[3] != 0 || sendAddress[4] != 0 || sendAddress[5] != 0)
-                        registerPeer(sendAddress);
-
-                    ESP_LOGI(TAG, "Send UID set to: [%d,%d,%d,%d,%d,%d]", sendAddress[0], sendAddress[1],
-                             sendAddress[2], sendAddress[3], sendAddress[4], sendAddress[5]);
-
-                    break;
-                }
-                default:
-                {
-                    sendAttempt = 0;
-                    do
-                    {
-                        sendStatus = sendMSPViaEspnow(packet);
-                        if (sendStatus == ESP_OK)
-                            xTaskNotifyWait(0x00, ULONG_MAX, &sendSuccess, portMAX_DELAY);
-                        else
-                        {
-                            ESP_LOGW(TAG, "ESPNOW message send status: %d", sendStatus);
-                            break;
-                        }
-                        vTaskDelay(espnowDelay);
-                    } while (++sendAttempt < CONFIG_ESPNOW_MAX_SEND_ATTEMPTS && !sendSuccess);
-
-                    ESP_LOGI(TAG, "ESPNOW message send attempts: %d", sendAttempt);
-                    break;
-                }
+                    uart_write_bytes(UART_PORT_NUM, bytes, packetSize);
+                    ESP_LOGI(TAG, "→ UART MSP 0x%04X (%d B)", packet->function, packetSize);
                 }
             }
-
             vRingbufferReturnItem(buffers->read, (void *)packet);
         }
+
+        // UART → TCP: receive MSP bytes from ESP32, parse, queue to TCP server
+        uint8_t data[128];
+        int len = uart_read_bytes(UART_PORT_NUM, data, sizeof(data), 0);
+        for (int i = 0; i < len; i++)
+        {
+            if (msp_rx.processReceivedByte(data[i]))
+            {
+                mspPacket_t *pkt = msp_rx.getReceivedPacket();
+                if (xRingbufferSend(buffers->write, pkt, sizeof(mspPacket_t),
+                                    pdMS_TO_TICKS(1000)) != pdTRUE)
+                    ESP_LOGE(TAG, "Failed to queue UART→TCP packet");
+                msp_rx.markPacketReceived();
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
