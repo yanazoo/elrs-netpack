@@ -55,7 +55,7 @@ static void onDataSent(const uint8_t *mac, esp_now_send_status_t status)
         Serial.println("[espnow] send FAILED");
 }
 
-static void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len)
+static void onDataRecv(const uint8_t *mac, const uint8_t *data, int len)
 {
     // Forward raw bytes to XIAO; it will parse them as MSP
     Serial2.write(data, len);
