@@ -1,10 +1,9 @@
-# ELRS Netpack — WiFi → ESP-NOW ブリッジ
+# ELRS Netpack — TCP → WiFi → ESP-NOW ブリッジ
 
 [English](README.md) | 日本語
 
 > [!IMPORTANT]
-> このフォークは、ESP32-S3 の根本的な無線競合問題を解決するため、**デュアル MCU 構成**に変更しています。
-> 元の Waveshare ESP32-S3 Ethernet ボードとは**互換性がありません**。
+> このフォークは **ESP32 を 2 台使用**して **TCP → WiFi → ESP-NOW** のバックパック通信システムを構築します。元の Waveshare ESP32-S3 Ethernet ボードとは**互換性がありません**。
 
 > [!NOTE]
 > このプロジェクトは ExpressLRS organization と公式な関係はありません。
@@ -13,7 +12,7 @@
 
 ## 概要
 
-ESP32-S3 は 2.4 GHz 無線を 1 つしか持っていないため、WiFi STA と ESP-NOW を同時に使用するとパケットロスやピアリストの破損が発生します。このフォークでは役割を 2 枚のボードに分離し、UART で接続することで問題を解決しています。
+RotorHazard は MSP パケットを TCP で送信します。このプロジェクトはそのパケットを UART で接続した 2 台の ESP32 を経由して、ELRS VRx バックパックまで ESP-NOW で届けるシステムです。
 
 ```
 RotorHazard（Raspberry Pi）
@@ -21,8 +20,8 @@ RotorHazard（Raspberry Pi）
         ▼
 ┌─────────────────────┐
 │  XIAO ESP32-S3      │  elrs-xiao-bridge/
-│  WiFi STA + TCP +   │
-│  mDNS               │
+│  WiFi STA           │  TCP を受信して UART に転送
+│  TCP サーバー + mDNS│
 └────────┬────────────┘
          │  UART 115200 baud
          │  D0(GPIO1) TX ──► GPIO26 RX
@@ -31,12 +30,15 @@ RotorHazard（Raspberry Pi）
          ▼
 ┌─────────────────────┐
 │  ESP32 Wrover-E     │  elrs-espnow-bridge/
-│  ESP-NOW 専用       │
+│  ESP-NOW 専用       │  ESP-NOW パケットの送受信
 └────────┬────────────┘
          │  ESP-NOW（2.4 GHz、ch 1）
          ▼
    ELRS VRx バックパック（FPV ゴーグル）
 ```
+
+**なぜ 2 台必要か？**
+ESP32-S3 の 2.4 GHz 無線は 1 つだけです。WiFi STA と ESP-NOW を同時に使うとパケットロスやピアリストの破損が発生するハードウェア上の制限があります。役割を 2 台のボードに分けて UART で接続することでこの問題を完全に解決しています。
 
 ---
 
@@ -146,20 +148,6 @@ Settings → ELRS バックパック 一般設定
 
 ---
 
-## RotorHazard プラグイン
-
-プラグイン（`custom_plugins/netpack_installer/`）をインストールすると、RotorHazard の UI からデバイス接続確認やファームウェア書き込みができます。
-
-**Raspberry Pi でのインストール：**
-```bash
-cp -r custom_plugins/netpack_installer ~/rh-data/plugins/
-sudo systemctl restart rotorhazard
-```
-
-> インストール先は `~/rh-data/plugins/` です。`~/RotorHazard/src/server/plugins/` では**ありません**。
-
----
-
 ## トラブルシューティング
 
 | 症状 | 対処 |
@@ -171,14 +159,6 @@ sudo systemctl restart rotorhazard
 | PlatformIO でボードが見つからない | `pio platform update espressif32` を実行 |
 | `No module named intelhex` | `C:\Users\<ユーザー名>\.platformio\penv\Scripts\python.exe -m pip install intelhex` を実行 |
 | 書き込みに失敗する | BOOT モードで接続（上記手順参照） |
-
----
-
-## 3D プリントケース
-
-`resources/3d-case/` に元の Waveshare ボード用ケースデータが含まれています（XIAO のサイズには非対応）。
-
-[![3D-Printable Case](resources/3d-case/case-photo.jpg)](resources/3d-case/)
 
 ---
 

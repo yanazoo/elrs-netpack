@@ -1,9 +1,9 @@
-# ELRS Netpack — WiFi → ESP-NOW Bridge
+# ELRS Netpack — TCP → WiFi → ESP-NOW Bridge
 
 English | [日本語](README.ja.md)
 
 > [!IMPORTANT]
-> This fork replaces the single-MCU WiFi + ESP-NOW design with a **dual-MCU architecture** that solves the fundamental radio conflict on ESP32-S3.
+> This fork builds a **TCP → WiFi → ESP-NOW** backpack communication system using **two ESP32 boards**, replacing the original single-board Ethernet design.
 > It is **not** compatible with the original Waveshare ESP32-S3 Ethernet board.
 
 > [!NOTE]
@@ -13,7 +13,7 @@ English | [日本語](README.ja.md)
 
 ## Overview
 
-The ESP32-S3 has one shared 2.4 GHz radio. Running WiFi STA and ESP-NOW simultaneously on the same chip causes packet loss and peer-list corruption. This fork solves that by splitting the roles across two boards connected by UART:
+RotorHazard sends MSP packets over TCP. This project bridges those packets all the way to an ELRS VRx backpack over ESP-NOW, using two ESP32 boards connected by UART:
 
 ```
 RotorHazard (Raspberry Pi)
@@ -21,8 +21,8 @@ RotorHazard (Raspberry Pi)
         ▼
 ┌─────────────────────┐
 │  XIAO ESP32-S3      │  elrs-xiao-bridge/
-│  WiFi STA + TCP +   │
-│  mDNS               │
+│  WiFi STA           │  Receives TCP, forwards via UART
+│  TCP server + mDNS  │
 └────────┬────────────┘
          │  UART 115200 baud
          │  D0(GPIO1) TX ──► GPIO26 RX
@@ -31,12 +31,15 @@ RotorHazard (Raspberry Pi)
          ▼
 ┌─────────────────────┐
 │  ESP32 Wrover-E     │  elrs-espnow-bridge/
-│  ESP-NOW only       │
+│  ESP-NOW only       │  Sends/receives ESP-NOW packets
 └────────┬────────────┘
          │  ESP-NOW (2.4 GHz, ch 1)
          ▼
    ELRS VRx Backpack (FPV Goggles)
 ```
+
+**Why two boards?**
+The ESP32-S3 has one shared 2.4 GHz radio. Running WiFi STA and ESP-NOW simultaneously on the same chip causes packet loss and peer-list corruption — a hardware limitation. Splitting the roles across two boards connected by UART solves this completely.
 
 ---
 
@@ -146,20 +149,6 @@ Settings → ELRS Backpack General
 
 ---
 
-## RotorHazard Plugin
-
-The plugin (`custom_plugins/netpack_installer/`) lets you check device connectivity and flash firmware from the RotorHazard UI.
-
-**Install on Raspberry Pi:**
-```bash
-cp -r custom_plugins/netpack_installer ~/rh-data/plugins/
-sudo systemctl restart rotorhazard
-```
-
-> Install to `~/rh-data/plugins/`, **not** `~/RotorHazard/src/server/plugins/`.
-
----
-
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -171,14 +160,6 @@ sudo systemctl restart rotorhazard
 | PlatformIO board not found | Run `pio platform update espressif32` |
 | `No module named intelhex` | Run `C:\Users\<you>\.platformio\penv\Scripts\python.exe -m pip install intelhex` |
 | Flash failed | Enter BOOT mode (see above) |
-
----
-
-## 3D-Printable Case
-
-Case files for the original Waveshare board are in `resources/3d-case/` (not sized for XIAO).
-
-[![3D-Printable Case](resources/3d-case/case-photo.jpg)](resources/3d-case/)
 
 ---
 
