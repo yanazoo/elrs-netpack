@@ -137,6 +137,16 @@ If flashing fails, enter bootloader mode:
 
 ---
 
+## RotorHazard Plugin
+
+Install the following plugin on your Raspberry Pi to enable ELRS backpack communication from RotorHazard:
+
+**[yanazoo/vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)**
+
+Follow the installation instructions in that repository, then proceed to the connection settings below.
+
+---
+
 ## RotorHazard Connection Settings
 
 ```
