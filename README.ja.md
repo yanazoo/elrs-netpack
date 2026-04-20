@@ -21,7 +21,7 @@ RotorHazard（Raspberry Pi）
 ┌─────────────────────┐
 │  XIAO ESP32-S3      │  elrs-xiao-bridge/
 │  WiFi STA           │  TCP を受信して UART に転送
-│  TCP サーバー + mDNS│
+│  TCP サーバー + mDNS  │
 └────────┬────────────┘
          │  UART 115200 baud
          │  D0(GPIO1) TX ──► GPIO26 RX
@@ -30,7 +30,7 @@ RotorHazard（Raspberry Pi）
          ▼
 ┌─────────────────────┐
 │  ESP32 Wrover-E     │  elrs-espnow-bridge/
-│  ESP-NOW 専用       │  ESP-NOW パケットの送受信
+│  ESP-NOW 専用        │  ESP-NOW パケットの送受信
 └────────┬────────────┘
          │  ESP-NOW（2.4 GHz、ch 1）
          ▼
