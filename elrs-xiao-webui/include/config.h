@@ -1,8 +1,8 @@
 #pragma once
 
 // WiFi (use NVS values if saved; these are compile-time defaults)
-#define WIFI_SSID        "your_ssid"
-#define WIFI_PASSWORD    "your_password"
+#define WIFI_SSID        "ELRS-Netpack-Setup"
+#define WIFI_PASSWORD    "elrs-netpack"
 
 #define TCP_PORT         8080
 #define MDNS_HOSTNAME    "elrs-netpack"
