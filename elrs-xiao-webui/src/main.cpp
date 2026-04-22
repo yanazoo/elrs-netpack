@@ -36,8 +36,10 @@ static bool     g_buzzerEnabled  = true;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-static void buzzerOn()  { digitalWrite(BUZZER_PIN_POS, HIGH); digitalWrite(BUZZER_PIN_NEG, LOW); }
-static void buzzerOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BUZZER_PIN_NEG, LOW); }
+static void ledOn()     { digitalWrite(LED_NOTIFY_PIN1, HIGH); digitalWrite(LED_NOTIFY_PIN2, HIGH); }
+static void ledOff()    { digitalWrite(LED_NOTIFY_PIN1, LOW);  digitalWrite(LED_NOTIFY_PIN2, LOW); }
+static void buzzerOn()  { digitalWrite(BUZZER_PIN_POS, HIGH); digitalWrite(BUZZER_PIN_NEG, LOW); ledOn(); }
+static void buzzerOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BUZZER_PIN_NEG, LOW); ledOff(); }
 
 static void beepShort()
 {
@@ -389,6 +391,8 @@ void setup()
 
     pinMode(BUZZER_PIN_POS, OUTPUT);
     pinMode(BUZZER_PIN_NEG, OUTPUT);
+    pinMode(LED_NOTIFY_PIN1, OUTPUT);
+    pinMode(LED_NOTIFY_PIN2, OUTPUT);
     buzzerOff();
 
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);

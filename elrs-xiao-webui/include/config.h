@@ -36,3 +36,7 @@
 // Alarm OFF: GPIO44=LOW,  GPIO8=LOW
 #define BUZZER_PIN_POS   44   // D7
 #define BUZZER_PIN_NEG   8    // D9
+
+// Notification LEDs (mirror buzzer state)
+#define LED_NOTIFY_PIN1  18
+#define LED_NOTIFY_PIN2  19
