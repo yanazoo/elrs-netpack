@@ -32,11 +32,26 @@ static float    g_alarmVoltage   = VBAT_DEFAULT_ALARM_V;
 static float    g_currentVoltage = 0.0f;
 static bool     g_alarmActive    = false;
 static uint32_t g_lastVbatMs     = 0;
+static bool     g_buzzerEnabled  = true;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 static void buzzerOn()  { digitalWrite(BUZZER_PIN_POS, HIGH); digitalWrite(BUZZER_PIN_NEG, LOW); }
 static void buzzerOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BUZZER_PIN_NEG, LOW); }
+
+static void beepShort()
+{
+    if (!g_buzzerEnabled || g_alarmActive) return;
+    buzzerOn();  delay(80);  buzzerOff();
+}
+
+static void beepDouble()
+{
+    if (!g_buzzerEnabled || g_alarmActive) return;
+    buzzerOn();  delay(80);  buzzerOff();
+    delay(120);
+    buzzerOn();  delay(80);  buzzerOff();
+}
 
 static void sendMspToTcp(mspPacket_t *pkt)
 {
@@ -75,6 +90,8 @@ static void handlePacketFromTcp(mspPacket_t *pkt)
         sendMspToTcp(&resp);
         return;
     }
+    if (pkt->function == MSP_ELRS_BACKPACK_SET_BUZZER)
+        beepShort();
     sendMspToUart(pkt);
 }
 
@@ -154,6 +171,10 @@ static String pageVoltage(const String &msg = "")
     snprintf(buf, sizeof(buf), "%.2f", g_alarmVoltage);
     p += buf;
     p += "'></label>";
+    p += "<label style='flex-direction:row;align-items:center;gap:8px'>"
+         "<input type='checkbox' name='buzzerEn' value='1'";
+    if (g_buzzerEnabled) p += " checked";
+    p += "> Notification sounds (WiFi / lap / save)</label>";
     p += "<button type='submit'>Save</button></form>";
     p += "</body></html>";
     return p;
@@ -210,6 +231,7 @@ static void wifiConnect()
         digitalWrite(LED_BUILTIN_PIN, HIGH);  // off on success
         Serial.printf("[wifi] connected IP=%s\n", WiFi.localIP().toString().c_str());
         startNetServices();
+        beepDouble();
     } else {
         Serial.println("[wifi] 59 s elapsed — starting captive portal");
         startCaptivePortal();
@@ -267,6 +289,7 @@ static void handleWifiPost()
     if (pass.length() > 0) prefs.putString("wifiPass", pass);
     prefs.end();
 
+    beepShort();
     webServer.send(200, "text/html", pageWifi("Saved. Connecting…"));
     delay(500);
     wifiConnect();
@@ -288,15 +311,18 @@ static void handleVoltagePost()
     if (newRatio < 1.0f) newRatio = 1.0f;
     if (newAlarm < 2.0f) newAlarm = 2.0f;
 
-    g_vbatRatio    = newRatio;
-    g_alarmVoltage = newAlarm;
+    g_vbatRatio      = newRatio;
+    g_alarmVoltage   = newAlarm;
+    g_buzzerEnabled  = webServer.hasArg("buzzerEn");
 
     prefs.begin("elrs", false);
     prefs.putFloat("vbatRatio", g_vbatRatio);
     prefs.putFloat("alarmV",    g_alarmVoltage);
+    prefs.putBool("buzzerEn",   g_buzzerEnabled);
     prefs.end();
 
     webServer.send(200, "text/html", pageVoltage("Settings saved."));
+    beepShort();
 }
 
 static void handleNotFound()
@@ -312,6 +338,7 @@ static void loadPrefs()
     prefs.begin("elrs", true);
     g_vbatRatio    = prefs.getFloat("vbatRatio", VBAT_DEFAULT_RATIO);
     g_alarmVoltage = prefs.getFloat("alarmV",    VBAT_DEFAULT_ALARM_V);
+    g_buzzerEnabled = prefs.getBool("buzzerEn",  true);
     prefs.end();
 }
 
