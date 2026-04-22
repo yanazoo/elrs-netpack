@@ -38,4 +38,4 @@
 #define BUZZER_PIN_NEG   8    // D9
 
 // Notification LED (mirrors buzzer state)
-#define LED_NOTIFY_PIN   23
+#define LED_NOTIFY_PIN   9
