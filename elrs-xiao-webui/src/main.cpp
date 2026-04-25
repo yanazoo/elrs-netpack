@@ -290,22 +290,19 @@ static void wifiConnect()
 
 static void checkWifiState()
 {
+    // AP モード中は一切干渉しない
+    if (apModeActive) return;
+
     if (WiFi.status() == WL_CONNECTED) {
-        if (apModeActive) {
-            apModeActive = false;
-            g_wifiLostMs = 0;
-            dnsServer.stop();
-            WiFi.mode(WIFI_STA);
-            digitalWrite(LED_BUILTIN_PIN, HIGH);
-            startNetServices();
-        } else {
-            g_wifiLostMs = 0;
-        }
+        g_wifiLostMs = 0;
         return;
     }
+
     if (g_wifiLostMs == 0) g_wifiLostMs = millis();
-    if (!apModeActive && millis() - g_wifiLostMs >= 60000) {
+
+    if (millis() - g_wifiLostMs >= 60000) {
         Serial.println("[wifi] 60 s without connection — reconnecting");
+        g_wifiLostMs = 0;
         wifiConnect();
     }
 }
