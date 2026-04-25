@@ -257,9 +257,17 @@ static void startNetServices()
 static void wifiConnect()
 {
     prefs.begin("elrs", true);
-    String ssid = prefs.getString("ssid",     WIFI_SSID);
-    String pass = prefs.getString("wifiPass", WIFI_PASSWORD);
+    String ssid       = prefs.getString("ssid",       WIFI_SSID);
+    String pass       = prefs.getString("wifiPass",   WIFI_PASSWORD);
+    bool   configured = prefs.getBool("configured",   false);
     prefs.end();
+
+    // First boot: skip STA attempt and go straight to AP
+    if (!configured) {
+        Serial.println("[wifi] not configured — starting captive portal immediately");
+        startCaptivePortal();
+        return;
+    }
 
     Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
     WiFi.disconnect(true);
@@ -335,8 +343,9 @@ static void handleWifiPost()
         return;
     }
     prefs.begin("elrs", false);
-    prefs.putString("ssid", ssid);
+    prefs.putString("ssid",       ssid);
     if (pass.length() > 0) prefs.putString("wifiPass", pass);
+    prefs.putBool("configured",   true);
     prefs.end();
 
     beepShort();
@@ -399,7 +408,8 @@ static void updateVoltage()
     float pinV = (sum / 8.0f / VBAT_ADC_RESOLUTION) * VBAT_VREF;
     g_currentVoltage = pinV * g_vbatRatio;
 
-    bool alarm = (g_currentVoltage < g_alarmVoltage);
+    // < 0.5 V はバッテリー未接続とみなしてアラームしない
+    bool alarm = (g_currentVoltage >= 0.5f && g_currentVoltage < g_alarmVoltage);
     if (alarm != g_alarmActive) {
         g_alarmActive = alarm;
         if (alarm) buzzerOn(); else buzzerOff();
