@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <DNSServer.h>
+#include "esp_wifi.h"
 #include "config.h"
 #include "msp.h"
 #include "msptypes.h"
@@ -427,6 +428,8 @@ void setup()
 {
     Serial.begin(115200);
     Serial.println("[boot] XIAO ESP32-S3 WiFi bridge + Web UI");
+
+    esp_wifi_set_max_tx_power(84);  // 84 * 0.25 = 21 dBm (max for ESP32-S3)
 
     analogReadResolution(12);
 
