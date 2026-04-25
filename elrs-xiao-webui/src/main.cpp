@@ -257,9 +257,16 @@ static void startNetServices()
 static void wifiConnect()
 {
     prefs.begin("elrs", true);
-    String ssid = prefs.getString("ssid",     WIFI_SSID);
-    String pass = prefs.getString("wifiPass", WIFI_PASSWORD);
+    String ssid       = prefs.getString("ssid",     WIFI_SSID);
+    String pass       = prefs.getString("wifiPass", WIFI_PASSWORD);
+    bool   configured = prefs.getBool("configured", false);
     prefs.end();
+
+    if (!configured) {
+        Serial.println("[wifi] not configured — starting captive portal immediately");
+        startCaptivePortal();
+        return;
+    }
 
     Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
     WiFi.disconnect(true);
@@ -337,6 +344,7 @@ static void handleWifiPost()
     prefs.begin("elrs", false);
     prefs.putString("ssid", ssid);
     if (pass.length() > 0) prefs.putString("wifiPass", pass);
+    prefs.putBool("configured", true);
     prefs.end();
 
     beepShort();
