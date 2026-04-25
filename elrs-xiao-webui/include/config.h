@@ -31,11 +31,11 @@
 #define LED_BUILTIN_PIN  21
 #define LED_AP_INTERVAL  200   // ms - fast blink half-period in AP mode
 
-// Buzzer (GPIO44 = positive pole, GPIO8 = negative pole)
-// Alarm ON : GPIO44=HIGH, GPIO8=LOW  -> 3.3 V across buzzer
-// Alarm OFF: GPIO44=LOW,  GPIO8=LOW
-#define BUZZER_PIN_POS   44   // D7
-#define BUZZER_PIN_NEG   8    // D9
+// Buzzer (GPIO4 = positive pole, GPIO6 = negative pole)
+// Alarm ON : GPIO4=HIGH, GPIO6=LOW  -> 3.3 V across buzzer
+// Alarm OFF: GPIO4=LOW,  GPIO6=LOW
+#define BUZZER_PIN_POS   4    // D3
+#define BUZZER_PIN_NEG   6    // D5
 
 // Notification LED (mirrors buzzer state)
 #define LED_NOTIFY_PIN   9
