@@ -139,6 +139,7 @@ void setup()
     // WiFi in STA mode but NOT connected to any AP — ESP-NOW only
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    esp_wifi_set_max_tx_power(84);  // 84 * 0.25 = 21 dBm (max for ESP32)
     esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
     Serial.printf("[wifi] channel fixed to %d\n", ESPNOW_CHANNEL);
 
