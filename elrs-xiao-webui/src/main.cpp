@@ -237,6 +237,7 @@ static String pageVoltage(const String &msg = "")
 static void startCaptivePortal()
 {
     WiFi.mode(WIFI_AP);
+    esp_wifi_set_max_tx_power(84);
     WiFi.softAP(ap_ssid, ap_password);
     apModeActive = true;
     dnsServer.start(53, "*", WiFi.softAPIP());
@@ -271,6 +272,7 @@ static void wifiConnect()
     Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
+    esp_wifi_set_max_tx_power(84);
     WiFi.begin(ssid.c_str(), pass.c_str());
     digitalWrite(LED_BUILTIN_PIN, LOW);
 
@@ -434,8 +436,6 @@ void setup()
 {
     Serial.begin(115200);
     Serial.println("[boot] XIAO ESP32-S3 WiFi bridge + Web UI");
-
-    esp_wifi_set_max_tx_power(84);  // 84 * 0.25 = 21 dBm (max for ESP32-S3)
 
     analogReadResolution(12);
 
