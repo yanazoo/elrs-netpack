@@ -34,6 +34,7 @@ static float    g_currentVoltage = 0.0f;
 static bool     g_alarmActive    = false;
 static uint32_t g_lastVbatMs     = 0;
 static bool     g_buzzerEnabled  = true;
+static bool     g_ledEnabled     = true;
 static bool     g_langJa         = true;
 
 // ── i18n helper ───────────────────────────────────────────────────────────────
@@ -45,23 +46,48 @@ static const char *L(const char *en, const char *ja)
 
 // ── buzzer / LED helpers ──────────────────────────────────────────────────────
 
-static void ledOn()     { digitalWrite(LED_NOTIFY_PIN, HIGH); }
-static void ledOff()    { digitalWrite(LED_NOTIFY_PIN, LOW);  }
-static void buzzerOn()  { digitalWrite(BUZZER_PIN_POS, HIGH); digitalWrite(BUZZER_PIN_NEG, LOW); ledOn(); }
-static void buzzerOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BUZZER_PIN_NEG, LOW); ledOff(); }
+static void buzzerRawOn()  { digitalWrite(BUZZER_PIN_POS, HIGH); digitalWrite(BUZZER_PIN_NEG, LOW); }
+static void buzzerRawOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BUZZER_PIN_NEG, LOW); }
+static void ledRawOn()     { digitalWrite(LED_NOTIFY_PIN, HIGH); }
+static void ledRawOff()    { digitalWrite(LED_NOTIFY_PIN, LOW);  }
 
+// アラーム制御（enable フラグを尊重）
+static void alarmOn()
+{
+    if (g_buzzerEnabled) buzzerRawOn();
+    if (g_ledEnabled)    ledRawOn();
+}
+static void alarmOff()
+{
+    buzzerRawOff();
+    ledRawOff();
+}
+
+// 通知ビープ（アラーム中でも動作、終了後にアラーム状態を復元）
 static void beepShort()
 {
-    if (!g_buzzerEnabled || g_alarmActive) return;
-    buzzerOn();  delay(80);  buzzerOff();
+    if (!g_buzzerEnabled && !g_ledEnabled) return;
+    if (g_buzzerEnabled) buzzerRawOn();
+    if (g_ledEnabled)    ledRawOn();
+    delay(80);
+    buzzerRawOff();
+    if (!g_alarmActive) ledRawOff();
+    else if (g_ledEnabled) ledRawOn();  // アラーム中は LED を戻す
 }
 
 static void beepDouble()
 {
-    if (!g_buzzerEnabled || g_alarmActive) return;
-    buzzerOn();  delay(80);  buzzerOff();
-    delay(120);
-    buzzerOn();  delay(80);  buzzerOff();
+    if (!g_buzzerEnabled && !g_ledEnabled) return;
+    for (int i = 0; i < 2; i++) {
+        if (g_buzzerEnabled) buzzerRawOn();
+        if (g_ledEnabled)    ledRawOn();
+        delay(80);
+        buzzerRawOff();
+        ledRawOff();
+        if (i == 0) delay(120);
+    }
+    // アラーム中なら状態を復元
+    if (g_alarmActive) alarmOn();
 }
 
 // ── MSP bridge helpers ────────────────────────────────────────────────────────
@@ -154,12 +180,14 @@ static String htmlHead(const char *title)
          ".lang:hover{background:#2e2e2e;color:#bbb}"
          "hr{border:none;border-top:1px solid #2a2a2a;margin:6px 0 14px}"
          "label{display:block;margin-top:14px;font-size:.88em;color:#999}"
+         ".chk{display:flex;align-items:center;gap:8px;margin-top:14px;"
+         "font-size:.88em;color:#999}"
          "input[type=text],input[type=password],input[type=number]"
          "{width:100%;padding:8px 10px;background:#212121;border:1px solid #383838;"
          "border-radius:5px;color:#ddd;margin-top:4px;font-size:.95em}"
          "input[type=text]:focus,input[type=password]:focus,input[type=number]:focus"
          "{outline:none;border-color:#5b9bd5}"
-         "input[type=checkbox]{width:auto;accent-color:#5b9bd5;margin-right:6px}"
+         "input[type=checkbox]{width:auto;accent-color:#5b9bd5}"
          "button{margin-top:18px;padding:9px 22px;background:#1a4a8a;color:#dde6f0;"
          "border:none;border-radius:5px;cursor:pointer;font-size:.95em}"
          "button:hover{background:#1f5aa8}"
@@ -220,13 +248,18 @@ static String pageVoltage(const String &msg = "")
     p += "<input type='number' name='ratio' step='0.01' min='1' value='";
     snprintf(buf, sizeof(buf), "%.2f", g_vbatRatio);
     p += buf; p += "'></label>";
-    p += "<label>"; p += L("Alarm threshold (V)", "アラーム閒値 (V)");
+    p += "<label>"; p += L("Alarm threshold (V)", "アラーム閾値 (V)");
     p += "<input type='number' name='alarm' step='0.01' min='2' max='5' value='";
     snprintf(buf, sizeof(buf), "%.2f", g_alarmVoltage);
     p += buf; p += "'></label>";
-    p += "<label><input type='checkbox' name='buzzerEn' value='1'";
+    // ブザー ON/OFF
+    p += "<div class='chk'><input type='checkbox' name='buzzerEn' value='1'";
     if (g_buzzerEnabled) p += " checked";
-    p += "> "; p += L("Notification sounds (WiFi / lap / save)", "通知音 (WiFi・ラップ・保存)"); p += "</label>";
+    p += "><span>"; p += L("Buzzer (notifications &amp; alarm)", "ブザー (通知・アラーム)"); p += "</span></div>";
+    // LED ON/OFF
+    p += "<div class='chk'><input type='checkbox' name='ledEn' value='1'";
+    if (g_ledEnabled) p += " checked";
+    p += "><span>"; p += L("LED (notifications &amp; alarm)", "LED (通知・アラーム)"); p += "</span></div>";
     p += "<button type='submit'>"; p += L("Save", "保存"); p += "</button>";
     p += "</form></body></html>";
     return p;
@@ -299,7 +332,6 @@ static void wifiConnect()
 
 static void checkWifiState()
 {
-    // AP モード中は一切干渉しない
     if (apModeActive) return;
 
     if (WiFi.status() == WL_CONNECTED) {
@@ -366,14 +398,16 @@ static void handleVoltagePost()
     if (newRatio < 1.0f) newRatio = 1.0f;
     if (newAlarm < 2.0f) newAlarm = 2.0f;
 
-    g_vbatRatio     = newRatio;
-    g_alarmVoltage  = newAlarm;
+    g_vbatRatio    = newRatio;
+    g_alarmVoltage = newAlarm;
     g_buzzerEnabled = webServer.hasArg("buzzerEn");
+    g_ledEnabled    = webServer.hasArg("ledEn");
 
     prefs.begin("elrs", false);
     prefs.putFloat("vbatRatio", g_vbatRatio);
     prefs.putFloat("alarmV",    g_alarmVoltage);
     prefs.putBool("buzzerEn",   g_buzzerEnabled);
+    prefs.putBool("ledEn",      g_ledEnabled);
     prefs.end();
 
     webServer.send(200, "text/html",
@@ -395,6 +429,7 @@ static void loadPrefs()
     g_vbatRatio     = prefs.getFloat("vbatRatio", VBAT_DEFAULT_RATIO);
     g_alarmVoltage  = prefs.getFloat("alarmV",    VBAT_DEFAULT_ALARM_V);
     g_buzzerEnabled = prefs.getBool("buzzerEn",   true);
+    g_ledEnabled    = prefs.getBool("ledEn",      true);
     g_langJa        = prefs.getBool("langJa",     true);
     prefs.end();
 }
@@ -404,16 +439,17 @@ static void updateVoltage()
     if (millis() - g_lastVbatMs < 1000) return;
     g_lastVbatMs = millis();
 
+    // analogReadMilliVolts uses built-in ADC calibration for accurate reading
     uint32_t sum = 0;
-    for (int i = 0; i < 8; i++) sum += analogRead(VBAT_ADC_PIN);
-    float pinV = (sum / 8.0f / VBAT_ADC_RESOLUTION) * VBAT_VREF;
+    for (int i = 0; i < 8; i++) sum += analogReadMilliVolts(VBAT_ADC_PIN);
+    float pinV = (sum / 8.0f) / 1000.0f;  // mV → V
     g_currentVoltage = pinV * g_vbatRatio;
 
     // < 0.5 V はバッテリー未接続とみなしてアラームしない
     bool alarm = (g_currentVoltage >= 0.5f && g_currentVoltage < g_alarmVoltage);
     if (alarm != g_alarmActive) {
         g_alarmActive = alarm;
-        if (alarm) buzzerOn(); else buzzerOff();
+        if (alarm) alarmOn(); else alarmOff();
         Serial.printf("[vbat] %.2f V — alarm %s\n", g_currentVoltage, alarm ? "ON" : "OFF");
     }
 }
@@ -438,6 +474,7 @@ void setup()
     Serial.println("[boot] XIAO ESP32-S3 WiFi bridge + Web UI");
 
     analogReadResolution(12);
+    analogSetAttenuation(ADC_11db);  // full 0–3.1 V range for ADC
 
     pinMode(LED_BUILTIN_PIN, OUTPUT);
     digitalWrite(LED_BUILTIN_PIN, HIGH);
@@ -445,7 +482,8 @@ void setup()
     pinMode(BUZZER_PIN_POS, OUTPUT);
     pinMode(BUZZER_PIN_NEG, OUTPUT);
     pinMode(LED_NOTIFY_PIN, OUTPUT);
-    buzzerOff();
+    buzzerRawOff();
+    ledRawOff();
 
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
