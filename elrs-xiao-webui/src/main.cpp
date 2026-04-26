@@ -31,8 +31,9 @@ static uint32_t g_wifiLostMs        = 0;
 
 static Led      builtinLed;   // GPIO21 active-LOW (Led クラス)
 // LED_NOTIFY_PIN (GPIO9) は analogWrite で PWM 輝度制御
-// NL_MIN: 内部カラーサイクル IC に常時給電するための最低デューティ（0 にすると IC がリセットされ色が戻る）
-static const uint8_t NL_MIN = 20;
+// NL_MIN: 内部カラーサイクル IC に常時給電するための最低デューティ
+// 低すぎると IC がリセットされ常に同じ色になる。31% 程度が安定動作の目安
+static const uint8_t NL_MIN = 80;
 static inline void nlWrite(uint8_t duty) { analogWrite(LED_NOTIFY_PIN, duty); }
 
 static float    g_vbatRatio      = VBAT_DEFAULT_RATIO;
