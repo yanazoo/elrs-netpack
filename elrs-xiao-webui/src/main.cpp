@@ -24,9 +24,12 @@ static WebServer   webServer(80);
 static Preferences prefs;
 static DNSServer   dnsServer;
 
-static bool     apModeActive     = false;
-static uint32_t g_wifiLostMs     = 0;
-static uint32_t g_ledBlinkMs     = 0;
+static bool     apModeActive        = false;
+static uint32_t g_wifiLostMs        = 0;
+static uint32_t g_ledBlinkMs        = 0;
+static bool     g_wifiWasConnected  = false;
+static uint32_t g_disconnFlashEnd   = 0;
+static uint32_t g_notifyLedMs       = 0;
 
 static float    g_vbatRatio      = VBAT_DEFAULT_RATIO;
 static float    g_alarmVoltage   = VBAT_DEFAULT_ALARM_V;
@@ -52,19 +55,11 @@ static void buzzerRawOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BU
 static void ledRawOn()     { digitalWrite(LED_NOTIFY_PIN, HIGH); }
 static void ledRawOff()    { digitalWrite(LED_NOTIFY_PIN, LOW);  }
 
-// アラーム制御（enable フラグを尊重）
-static void alarmOn()
-{
-    if (g_buzzerEnabled) buzzerRawOn();
-    if (g_ledEnabled)    ledRawOn();
-}
-static void alarmOff()
-{
-    buzzerRawOff();
-    ledRawOff();
-}
+// アラーム制御（ブザーのみ — LED は updateNotifyLed() が一元管理）
+static void alarmOn()  { if (g_buzzerEnabled) buzzerRawOn(); }
+static void alarmOff() { buzzerRawOff(); }
 
-// 通知ビープ（アラーム中でも動作、終了後にアラーム状態を復元）
+// 通知ビープ（LED は updateNotifyLed() が次ループで正しい状態に戻す）
 static void beepShort()
 {
     if (!g_buzzerEnabled && !g_ledEnabled) return;
@@ -72,8 +67,7 @@ static void beepShort()
     if (g_ledEnabled)    ledRawOn();
     delay(80);
     buzzerRawOff();
-    if (!g_alarmActive) ledRawOff();
-    else if (g_ledEnabled) ledRawOn();  // アラーム中は LED を戻す
+    ledRawOff();
 }
 
 static void beepDouble()
@@ -87,8 +81,6 @@ static void beepDouble()
         ledRawOff();
         if (i == 0) delay(120);
     }
-    // アラーム中なら状態を復元
-    if (g_alarmActive) alarmOn();
 }
 
 // ── MSP bridge helpers ────────────────────────────────────────────────────────
@@ -322,8 +314,9 @@ static void wifiConnect()
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
-        apModeActive = false;
-        g_wifiLostMs = 0;
+        apModeActive       = false;
+        g_wifiLostMs       = 0;
+        g_wifiWasConnected = true;
         dnsServer.stop();
         digitalWrite(LED_BUILTIN_PIN, HIGH);
         Serial.printf("[wifi] connected IP=%s\n", WiFi.localIP().toString().c_str());
@@ -339,15 +332,20 @@ static void checkWifiState()
 {
     if (apModeActive) return;
 
-    if (WiFi.status() == WL_CONNECTED) {
-        g_wifiLostMs = 0;
-        return;
+    bool connected = (WiFi.status() == WL_CONNECTED);
+
+    // 切断を検知したら 5 秒間 LED 高速点滅
+    if (g_wifiWasConnected && !connected) {
+        g_disconnFlashEnd = millis() + 5000;
+        g_notifyLedMs     = 0;
+        Serial.println("[wifi] disconnected — LED flash 5 s");
     }
+    g_wifiWasConnected = connected;
+
+    if (connected) { g_wifiLostMs = 0; return; }
 
     if (g_wifiLostMs == 0) g_wifiLostMs = millis();
-
     if (millis() - g_wifiLostMs >= 60000) {
-        Serial.println("[wifi] 60 s without connection — reconnecting");
         g_wifiLostMs = 0;
         wifiConnect();
     }
@@ -386,10 +384,10 @@ static void handleWifiPost()
     prefs.putBool("configured", true);
     prefs.end();
 
-    beepShort();
     webServer.send(200, "text/html",
         pageWifi(L("Saved. Connecting\xe2\x80\xa6", "保存しました。接続中…")));
-    delay(500);
+    beepShort();
+    delay(420);
     wifiConnect();
 }
 
@@ -481,6 +479,36 @@ static void updateLed()
     }
 }
 
+// LED_NOTIFY_PIN の全状態を一元管理
+// Priority: AP/切断点滅 > アラーム点灯 > ハートビート > 消灯
+static void updateNotifyLed()
+{
+    if (!g_ledEnabled) { ledRawOff(); return; }
+
+    uint32_t now = millis();
+
+    // AP モードまたは切断直後 → 高速点滅 80 ms
+    if (apModeActive || now < g_disconnFlashEnd) {
+        if (now - g_notifyLedMs >= 80) {
+            g_notifyLedMs = now;
+            digitalWrite(LED_NOTIFY_PIN, !digitalRead(LED_NOTIFY_PIN));
+        }
+        return;
+    }
+
+    // アラーム中 → 点灯
+    if (g_alarmActive) { ledRawOn(); return; }
+
+    // STA 接続中 → ハートビート（2 秒ごとに 60 ms 点灯）
+    if (WiFi.status() == WL_CONNECTED) {
+        if (now % 2000 < 60) ledRawOn();
+        else                  ledRawOff();
+        return;
+    }
+
+    ledRawOff();
+}
+
 // ── Arduino entry points ──────────────────────────────────────────────────────
 
 void setup()
@@ -532,6 +560,7 @@ void loop()
     webServer.handleClient();
     updateLed();
     updateVoltage();
+    updateNotifyLed();
 
     if (!tcpClient || !tcpClient.connected()) {
         WiFiClient c = tcpServer.available();
