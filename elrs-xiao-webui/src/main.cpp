@@ -115,7 +115,7 @@ static void handlePacketFromTcp(mspPacket_t *pkt)
         resp.makeResponse();
         resp.function    = MSP_ELRS_GET_BACKPACK_VERSION;
         resp.payloadSize = 4;
-        resp.payload[0]  = 0;
+        resp.payload[0]  = 10;
         resp.payload[1]  = 1;
         resp.payload[2]  = 0;
         resp.payload[3]  = 0;
