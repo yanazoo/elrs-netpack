@@ -487,8 +487,17 @@ static void updateNotifyLed()
 
     uint32_t now = millis();
 
-    // AP モードまたは切断直後 → 高速点滅 80 ms
-    if (apModeActive || now < g_disconnFlashEnd) {
+    // AP モード → ゆっくり点滅 500 ms（設定待ち）
+    if (apModeActive) {
+        if (now - g_notifyLedMs >= 500) {
+            g_notifyLedMs = now;
+            digitalWrite(LED_NOTIFY_PIN, !digitalRead(LED_NOTIFY_PIN));
+        }
+        return;
+    }
+
+    // WiFi 切断直後 5 s → 高速点滅 80 ms
+    if (now < g_disconnFlashEnd) {
         if (now - g_notifyLedMs >= 80) {
             g_notifyLedMs = now;
             digitalWrite(LED_NOTIFY_PIN, !digitalRead(LED_NOTIFY_PIN));
