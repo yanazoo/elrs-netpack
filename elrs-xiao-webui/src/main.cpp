@@ -508,10 +508,12 @@ static void updateNotifyLed()
     // アラーム中 → 点灯
     if (g_alarmActive) { ledRawOn(); return; }
 
-    // STA 接続中 → ハートビート（2 秒ごとに 60 ms 点灯）
+    // STA 接続中 → ハートビート（2 秒周期のダブルパルス）
+    // ON 80ms → OFF 100ms → ON 80ms → OFF 1740ms
     if (WiFi.status() == WL_CONNECTED) {
-        if (now % 2000 < 60) ledRawOn();
-        else                  ledRawOff();
+        uint32_t phase = now % 2000;
+        if (phase < 80 || (phase >= 180 && phase < 260)) ledRawOn();
+        else                                              ledRawOff();
         return;
     }
 
