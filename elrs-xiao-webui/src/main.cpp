@@ -7,8 +7,11 @@
 #include <DNSServer.h>
 #include "esp_wifi.h"
 #include "config.h"
+#include "led.h"
 #include "msp.h"
 #include "msptypes.h"
+
+typedef enum { NL_OFF, NL_AP_BLINK, NL_DISCONN_BLINK, NL_ALARM, NL_HEARTBEAT } NotifyLedMode;
 
 // ── TCP bridge globals ────────────────────────────────────────────────────────
 
@@ -26,8 +29,12 @@ static DNSServer   dnsServer;
 
 static bool     apModeActive        = false;
 static uint32_t g_wifiLostMs        = 0;
-static uint32_t g_ledBlinkMs        = 0;
-static uint32_t g_notifyLedMs       = 0;
+
+static Led           builtinLed;
+static Led           notifyLed;
+static NotifyLedMode g_nlMode    = NL_OFF;
+static uint8_t       g_hbPhase   = 0;
+static uint32_t      g_hbNextMs  = 0;
 
 static float    g_vbatRatio      = VBAT_DEFAULT_RATIO;
 static float    g_alarmVoltage   = VBAT_DEFAULT_ALARM_V;
@@ -50,22 +57,21 @@ static const char *L(const char *en, const char *ja)
 
 static void buzzerRawOn()  { digitalWrite(BUZZER_PIN_POS, HIGH); digitalWrite(BUZZER_PIN_NEG, LOW); }
 static void buzzerRawOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BUZZER_PIN_NEG, LOW); }
-static void ledRawOn()     { digitalWrite(LED_NOTIFY_PIN, HIGH); }
-static void ledRawOff()    { digitalWrite(LED_NOTIFY_PIN, LOW);  }
 
 // アラーム制御（ブザーのみ — LED は updateNotifyLed() が一元管理）
 static void alarmOn()  { if (g_buzzerEnabled) buzzerRawOn(); }
 static void alarmOff() { buzzerRawOff(); }
 
-// 通知ビープ（LED は updateNotifyLed() が次ループで正しい状態に戻す）
+// 通知ビープ — 終了後 g_nlMode をリセットして次ループで LED 状態を復元
 static void beepShort()
 {
     if (!g_buzzerEnabled && !g_ledEnabled) return;
     if (g_buzzerEnabled) buzzerRawOn();
-    if (g_ledEnabled)    ledRawOn();
+    if (g_ledEnabled)    notifyLed.on(80);
     delay(80);
     buzzerRawOff();
-    ledRawOff();
+    notifyLed.off();
+    g_nlMode = NL_OFF;  // force resync
 }
 
 static void beepDouble()
@@ -73,12 +79,13 @@ static void beepDouble()
     if (!g_buzzerEnabled && !g_ledEnabled) return;
     for (int i = 0; i < 2; i++) {
         if (g_buzzerEnabled) buzzerRawOn();
-        if (g_ledEnabled)    ledRawOn();
+        if (g_ledEnabled)    notifyLed.on(80);
         delay(80);
         buzzerRawOff();
-        ledRawOff();
+        notifyLed.off();
         if (i == 0) delay(120);
     }
+    g_nlMode = NL_OFF;  // force resync
 }
 
 // ── MSP bridge helpers ────────────────────────────────────────────────────────
@@ -268,6 +275,7 @@ static void startCaptivePortal()
     esp_wifi_set_max_tx_power(84);
     WiFi.softAP(ap_ssid, ap_password);
     apModeActive = true;
+    builtinLed.blink(LED_AP_INTERVAL, LED_AP_INTERVAL);
     dnsServer.start(53, "*", WiFi.softAPIP());
     Serial.printf("[ap] IP=%s\n", WiFi.softAPIP().toString().c_str());
 }
@@ -302,7 +310,7 @@ static void wifiConnect()
     WiFi.mode(WIFI_STA);
     esp_wifi_set_max_tx_power(84);
     WiFi.begin(ssid.c_str(), pass.c_str());
-    digitalWrite(LED_BUILTIN_PIN, LOW);
+    builtinLed.on();
 
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 59000) {
@@ -315,7 +323,7 @@ static void wifiConnect()
         apModeActive = false;
         g_wifiLostMs = 0;
         dnsServer.stop();
-        digitalWrite(LED_BUILTIN_PIN, HIGH);
+        builtinLed.off();
         Serial.printf("[wifi] connected IP=%s\n", WiFi.localIP().toString().c_str());
         startNetServices();
         beepDouble();
@@ -451,50 +459,54 @@ static void updateVoltage()
 
 static void updateLed()
 {
-    if (!apModeActive) {
-        digitalWrite(LED_BUILTIN_PIN, HIGH);
-        return;
-    }
-    if (millis() - g_ledBlinkMs >= LED_AP_INTERVAL) {
-        g_ledBlinkMs = millis();
-        digitalWrite(LED_BUILTIN_PIN, !digitalRead(LED_BUILTIN_PIN));
+    builtinLed.handleLed(millis());
+    // STA 接続中は消灯を維持（AP 離脱後の残像を防ぐ）
+    if (!apModeActive) builtinLed.off();
+}
+
+// 状態遷移時のみ Led オブジェクトを再設定する
+static void setNotifyMode(NotifyLedMode mode)
+{
+    if (g_nlMode == mode) return;
+    g_nlMode   = mode;
+    g_hbPhase  = 0;
+    g_hbNextMs = 0;
+    switch (mode) {
+        case NL_OFF:           notifyLed.off();              break;
+        case NL_AP_BLINK:      notifyLed.blink(500, 500);    break;
+        case NL_DISCONN_BLINK: notifyLed.blink(80,  80);     break;
+        case NL_ALARM:         notifyLed.on();               break;
+        case NL_HEARTBEAT:     /* 最初のパルスは次の tick */ break;
     }
 }
 
-// LED_NOTIFY_PIN の全状態を一元管理
-// Priority: AP点滅 > WiFi切断点滅 > アラーム点灯 > ハートビート > 消灯
+// LED_NOTIFY_PIN 一元管理
+// Priority: AP点滅 > 切断点滅 > アラーム > ハートビート > 消灯
 static void updateNotifyLed()
 {
-    if (!g_ledEnabled) { ledRawOff(); return; }
+    if (!g_ledEnabled) { notifyLed.off(); g_nlMode = NL_OFF; return; }
+
+    // 目標モード決定
+    NotifyLedMode desired;
+    if      (apModeActive)                  desired = NL_AP_BLINK;
+    else if (WiFi.status() != WL_CONNECTED) desired = NL_DISCONN_BLINK;
+    else if (g_alarmActive)                 desired = NL_ALARM;
+    else                                    desired = NL_HEARTBEAT;
+
+    setNotifyMode(desired);
 
     uint32_t now = millis();
 
-    // AP モード → ゆっくり点滅 500 ms（設定待ち）
-    if (apModeActive) {
-        if (now - g_notifyLedMs >= 500) {
-            g_notifyLedMs = now;
-            digitalWrite(LED_NOTIFY_PIN, !digitalRead(LED_NOTIFY_PIN));
+    if (g_nlMode == NL_HEARTBEAT) {
+        // ダブルパルス: 第1拍(0ms) → 第2拍(180ms) → 休止(260ms〜2000ms)
+        if (now >= g_hbNextMs) {
+            notifyLed.on(80);
+            g_hbNextMs = now + (g_hbPhase == 0 ? 180 : 1820);
+            g_hbPhase  = (g_hbPhase == 0) ? 1 : 0;
         }
-        return;
     }
 
-    // WiFi 未接続（切断中・再接続待ち） → 高速点滅 80 ms（再接続まで継続）
-    if (WiFi.status() != WL_CONNECTED) {
-        if (now - g_notifyLedMs >= 80) {
-            g_notifyLedMs = now;
-            digitalWrite(LED_NOTIFY_PIN, !digitalRead(LED_NOTIFY_PIN));
-        }
-        return;
-    }
-
-    // アラーム中 → 点灯
-    if (g_alarmActive) { ledRawOn(); return; }
-
-    // STA 接続中（通常） → ハートビート（2 秒周期のダブルパルス）
-    // 第1拍: ON 80ms → OFF 100ms → 第2拍: ON 80ms → 休止 1740ms
-    uint32_t phase = now % 2000;
-    if (phase < 80 || (phase >= 180 && phase < 260)) ledRawOn();
-    else                                              ledRawOff();
+    notifyLed.handleLed(now);
 }
 
 // ── Arduino entry points ──────────────────────────────────────────────────────
@@ -506,16 +518,13 @@ void setup()
 
     analogReadResolution(12);
 
-    pinMode(LED_BUILTIN_PIN, OUTPUT);
-    digitalWrite(LED_BUILTIN_PIN, HIGH);
-
+    builtinLed.init(LED_BUILTIN_PIN, true);   // active-LOW
     pinMode(BUZZER_PIN_POS, OUTPUT);
     pinMode(BUZZER_PIN_NEG, OUTPUT);
-    pinMode(LED_NOTIFY_PIN, OUTPUT);
+    notifyLed.init(LED_NOTIFY_PIN, false);    // active-HIGH
     buzzerRawOff();
-    ledRawOff();
 
-    // Set attenuation only for the VBAT pin (GPIO3) after OUTPUT pins are configured
+    // VBAT ピンのみ ADC 設定（全ピン一括は GPIO9 を入力化してしまうため不可）
     analogSetPinAttenuation(VBAT_ADC_PIN, ADC_11db);
 
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
