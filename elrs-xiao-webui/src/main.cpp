@@ -31,9 +31,6 @@ static uint32_t g_wifiLostMs        = 0;
 
 static Led      builtinLed;   // GPIO21 active-LOW (Led クラス)
 // LED_NOTIFY_PIN (GPIO9) は analogWrite で PWM 輝度制御
-// NL_MIN: 内部カラーサイクル IC に常時給電するための最低デューティ
-// 低すぎると IC がリセットされ常に同じ色になる。31% 程度が安定動作の目安
-static const uint8_t NL_MIN = 80;
 static inline void nlWrite(uint8_t duty) { analogWrite(LED_NOTIFY_PIN, duty); }
 
 static float    g_vbatRatio      = VBAT_DEFAULT_RATIO;
@@ -476,15 +473,15 @@ static void updateNotifyLed()
 
     uint32_t now = millis();
 
-    // AP モード → NL_MIN ↔ 255 の 500ms ゆっくり点滅
+    // AP モード → 0 ↔ 255 の 500ms ゆっくり点滅
     if (apModeActive) {
-        nlWrite((now % 1000 < 500) ? 255 : NL_MIN);
+        nlWrite((now % 1000 < 500) ? 255 : 0);
         return;
     }
 
-    // WiFi 未接続 → NL_MIN ↔ 255 の 80ms 高速点滅
+    // WiFi 未接続 → 0 ↔ 255 の 80ms 高速点滅
     if (WiFi.status() != WL_CONNECTED) {
-        nlWrite((now % 160 < 80) ? 255 : NL_MIN);
+        nlWrite((now % 160 < 80) ? 255 : 0);
         return;
     }
 
@@ -492,18 +489,17 @@ static void updateNotifyLed()
     if (g_alarmActive) { nlWrite(255); return; }
 
     // 通常（STA 接続中）→ PWM ハートビート（2 秒周期・ダブルパルス）
-    // NL_MIN を下限にして IC に常時給電 → 色変化が途切れない
-    // 第1拍: 0-100ms 立ち上がり → 100-350ms フェードアウト
-    // 第2拍: 450-550ms 立ち上がり → 550-800ms フェードアウト
-    // 休止 : 800-2000ms（NL_MIN 維持）
+    // 第1拍: 0-100ms 立ち上がり(0→255) → 100-350ms フェードアウト(255→0)
+    // 第2拍: 450-550ms 立ち上がり(0→255) → 550-800ms フェードアウト(255→0)
+    // 休止 : 800-2000ms（消灯）
     uint32_t phase = now % 2000;
-    uint8_t  bri;
-    if      (phase < 100)  bri = (uint8_t)(NL_MIN + phase          * (255 - NL_MIN) / 100);
-    else if (phase < 350)  bri = (uint8_t)(NL_MIN + (350 - phase)  * (255 - NL_MIN) / 250);
-    else if (phase < 450)  bri = NL_MIN;
-    else if (phase < 550)  bri = (uint8_t)(NL_MIN + (phase - 450)  * (255 - NL_MIN) / 100);
-    else if (phase < 800)  bri = (uint8_t)(NL_MIN + (800 - phase)  * (255 - NL_MIN) / 250);
-    else                   bri = NL_MIN;
+    uint8_t  bri   = 0;
+    if      (phase < 100)  bri = (uint8_t)(phase          * 255 / 100);
+    else if (phase < 350)  bri = (uint8_t)((350 - phase)  * 255 / 250);
+    else if (phase < 450)  bri = 0;
+    else if (phase < 550)  bri = (uint8_t)((phase - 450)  * 255 / 100);
+    else if (phase < 800)  bri = (uint8_t)((800 - phase)  * 255 / 250);
+    else                   bri = 0;
     nlWrite(bri);
 }
 
