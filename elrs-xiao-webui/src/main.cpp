@@ -489,7 +489,6 @@ void setup()
     Serial.println("[boot] XIAO ESP32-S3 WiFi bridge + Web UI");
 
     analogReadResolution(12);
-    analogSetAttenuation(ADC_11db);  // full 0–3.1 V range for ADC
 
     pinMode(LED_BUILTIN_PIN, OUTPUT);
     digitalWrite(LED_BUILTIN_PIN, HIGH);
@@ -499,6 +498,9 @@ void setup()
     pinMode(LED_NOTIFY_PIN, OUTPUT);
     buzzerRawOff();
     ledRawOff();
+
+    // Set attenuation only for the VBAT pin (GPIO3) after OUTPUT pins are configured
+    analogSetPinAttenuation(VBAT_ADC_PIN, ADC_11db);
 
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
