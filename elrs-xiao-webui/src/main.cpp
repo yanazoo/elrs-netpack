@@ -35,6 +35,7 @@ static bool     g_alarmActive    = false;
 static uint32_t g_lastVbatMs     = 0;
 static bool     g_buzzerEnabled  = true;
 static bool     g_ledEnabled     = true;
+static bool     g_vbatAlarmEnabled = false;  // デフォルト OFF（バッテリー未接続時の誤発報防止）
 static bool     g_langJa         = true;
 
 // ── i18n helper ───────────────────────────────────────────────────────────────
@@ -252,6 +253,10 @@ static String pageVoltage(const String &msg = "")
     p += "<input type='number' name='alarm' step='0.01' min='2' max='5' value='";
     snprintf(buf, sizeof(buf), "%.2f", g_alarmVoltage);
     p += buf; p += "'></label>";
+    // 電圧アラーム有効/無効
+    p += "<div class='chk'><input type='checkbox' name='vbatAlarmEn' value='1'";
+    if (g_vbatAlarmEnabled) p += " checked";
+    p += "><span>"; p += L("Enable voltage alarm", "電圧アラームを有効にする"); p += "</span></div>";
     // ブザー ON/OFF
     p += "<div class='chk'><input type='checkbox' name='buzzerEn' value='1'";
     if (g_buzzerEnabled) p += " checked";
@@ -398,16 +403,24 @@ static void handleVoltagePost()
     if (newRatio < 1.0f) newRatio = 1.0f;
     if (newAlarm < 2.0f) newAlarm = 2.0f;
 
-    g_vbatRatio    = newRatio;
-    g_alarmVoltage = newAlarm;
-    g_buzzerEnabled = webServer.hasArg("buzzerEn");
-    g_ledEnabled    = webServer.hasArg("ledEn");
+    g_vbatRatio        = newRatio;
+    g_alarmVoltage     = newAlarm;
+    g_vbatAlarmEnabled = webServer.hasArg("vbatAlarmEn");
+    g_buzzerEnabled    = webServer.hasArg("buzzerEn");
+    g_ledEnabled       = webServer.hasArg("ledEn");
+
+    // アラームが無効になったら即解除
+    if (!g_vbatAlarmEnabled && g_alarmActive) {
+        g_alarmActive = false;
+        alarmOff();
+    }
 
     prefs.begin("elrs", false);
-    prefs.putFloat("vbatRatio", g_vbatRatio);
-    prefs.putFloat("alarmV",    g_alarmVoltage);
-    prefs.putBool("buzzerEn",   g_buzzerEnabled);
-    prefs.putBool("ledEn",      g_ledEnabled);
+    prefs.putFloat("vbatRatio",   g_vbatRatio);
+    prefs.putFloat("alarmV",      g_alarmVoltage);
+    prefs.putBool("vbatAlarmEn",  g_vbatAlarmEnabled);
+    prefs.putBool("buzzerEn",     g_buzzerEnabled);
+    prefs.putBool("ledEn",        g_ledEnabled);
     prefs.end();
 
     webServer.send(200, "text/html",
@@ -428,9 +441,10 @@ static void loadPrefs()
     prefs.begin("elrs", true);
     g_vbatRatio     = prefs.getFloat("vbatRatio", VBAT_DEFAULT_RATIO);
     g_alarmVoltage  = prefs.getFloat("alarmV",    VBAT_DEFAULT_ALARM_V);
-    g_buzzerEnabled = prefs.getBool("buzzerEn",   true);
-    g_ledEnabled    = prefs.getBool("ledEn",      true);
-    g_langJa        = prefs.getBool("langJa",     true);
+    g_vbatAlarmEnabled = prefs.getBool("vbatAlarmEn", false);
+    g_buzzerEnabled    = prefs.getBool("buzzerEn",    true);
+    g_ledEnabled       = prefs.getBool("ledEn",       true);
+    g_langJa           = prefs.getBool("langJa",      true);
     prefs.end();
 }
 
@@ -445,8 +459,9 @@ static void updateVoltage()
     float pinV = (sum / 8.0f) / 1000.0f;  // mV → V
     g_currentVoltage = pinV * g_vbatRatio;
 
-    // < 0.5 V はバッテリー未接続とみなしてアラームしない
-    bool alarm = (g_currentVoltage >= 0.5f && g_currentVoltage < g_alarmVoltage);
+    bool alarm = g_vbatAlarmEnabled
+                 && g_currentVoltage >= 0.5f
+                 && g_currentVoltage < g_alarmVoltage;
     if (alarm != g_alarmActive) {
         g_alarmActive = alarm;
         if (alarm) alarmOn(); else alarmOff();
