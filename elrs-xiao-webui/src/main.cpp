@@ -31,6 +31,8 @@ static uint32_t g_wifiLostMs        = 0;
 
 static Led      builtinLed;   // GPIO21 active-LOW (Led クラス)
 // LED_NOTIFY_PIN (GPIO9) は analogWrite で PWM 輝度制御
+// NL_MIN: 内部カラーサイクル IC に常時給電するための最低デューティ（0 にすると IC がリセットされ色が戻る）
+static const uint8_t NL_MIN = 20;
 static inline void nlWrite(uint8_t duty) { analogWrite(LED_NOTIFY_PIN, duty); }
 
 static float    g_vbatRatio      = VBAT_DEFAULT_RATIO;
@@ -303,13 +305,14 @@ static void wifiConnect()
     Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(false);  // 自動再接続は checkWifiState() で制御
     esp_wifi_set_max_tx_power(84);
     WiFi.begin(ssid.c_str(), pass.c_str());
     builtinLed.on();
 
     uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 59000) {
-        delay(500);
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
+        delay(200);  // 500ms → 200ms: 接続成功の検出を高速化
         Serial.print('.');
     }
     Serial.println();
@@ -332,8 +335,13 @@ static void checkWifiState()
 {
     if (apModeActive) return;
     if (WiFi.status() == WL_CONNECTED) { g_wifiLostMs = 0; return; }
-    if (g_wifiLostMs == 0) { g_wifiLostMs = millis(); Serial.println("[wifi] disconnected"); }
-    if (millis() - g_wifiLostMs >= 60000) { g_wifiLostMs = 0; wifiConnect(); }
+    if (g_wifiLostMs == 0) {
+        g_wifiLostMs = millis();
+        WiFi.reconnect();  // 即時再接続を試みる（高速パス）
+        Serial.println("[wifi] disconnected — reconnecting immediately");
+    }
+    // 15 秒経っても復帰しなければ完全再接続シーケンスへ
+    if (millis() - g_wifiLostMs >= 15000) { g_wifiLostMs = 0; wifiConnect(); }
 }
 
 // ── Web handlers ──────────────────────────────────────────────────────────────
@@ -460,21 +468,22 @@ static void updateLed()
 
 // LED_NOTIFY_PIN 輝度制御（analogWrite PWM）
 // Priority: AP点滅 > 切断点滅 > アラーム > ハートビート > 消灯
+// ※ g_ledEnabled=false のみ完全消灯。それ以外は NL_MIN を下限に IC 給電を維持
 static void updateNotifyLed()
 {
     if (!g_ledEnabled) { nlWrite(0); return; }
 
     uint32_t now = millis();
 
-    // AP モード → 500ms ゆっくり点滅（全輝度）
+    // AP モード → NL_MIN ↔ 255 の 500ms ゆっくり点滅
     if (apModeActive) {
-        nlWrite((now % 1000 < 500) ? 255 : 0);
+        nlWrite((now % 1000 < 500) ? 255 : NL_MIN);
         return;
     }
 
-    // WiFi 未接続 → 80ms 高速点滅（全輝度）
+    // WiFi 未接続 → NL_MIN ↔ 255 の 80ms 高速点滅
     if (WiFi.status() != WL_CONNECTED) {
-        nlWrite((now % 160 < 80) ? 255 : 0);
+        nlWrite((now % 160 < 80) ? 255 : NL_MIN);
         return;
     }
 
@@ -482,17 +491,18 @@ static void updateNotifyLed()
     if (g_alarmActive) { nlWrite(255); return; }
 
     // 通常（STA 接続中）→ PWM ハートビート（2 秒周期・ダブルパルス）
+    // NL_MIN を下限にして IC に常時給電 → 色変化が途切れない
     // 第1拍: 0-100ms 立ち上がり → 100-350ms フェードアウト
     // 第2拍: 450-550ms 立ち上がり → 550-800ms フェードアウト
-    // 休止 : 800-2000ms
+    // 休止 : 800-2000ms（NL_MIN 維持）
     uint32_t phase = now % 2000;
-    uint8_t  bri   = 0;
-    if      (phase < 100)  bri = (uint8_t)(phase * 255 / 100);
-    else if (phase < 350)  bri = (uint8_t)((350 - phase) * 255 / 250);
-    else if (phase < 450)  bri = 0;
-    else if (phase < 550)  bri = (uint8_t)((phase - 450) * 255 / 100);
-    else if (phase < 800)  bri = (uint8_t)((800 - phase) * 255 / 250);
-    else                   bri = 0;
+    uint8_t  bri;
+    if      (phase < 100)  bri = (uint8_t)(NL_MIN + phase          * (255 - NL_MIN) / 100);
+    else if (phase < 350)  bri = (uint8_t)(NL_MIN + (350 - phase)  * (255 - NL_MIN) / 250);
+    else if (phase < 450)  bri = NL_MIN;
+    else if (phase < 550)  bri = (uint8_t)(NL_MIN + (phase - 450)  * (255 - NL_MIN) / 100);
+    else if (phase < 800)  bri = (uint8_t)(NL_MIN + (800 - phase)  * (255 - NL_MIN) / 250);
+    else                   bri = NL_MIN;
     nlWrite(bri);
 }
 
