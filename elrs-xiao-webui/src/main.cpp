@@ -27,8 +27,6 @@ static DNSServer   dnsServer;
 static bool     apModeActive        = false;
 static uint32_t g_wifiLostMs        = 0;
 static uint32_t g_ledBlinkMs        = 0;
-static bool     g_wifiWasConnected  = false;
-static uint32_t g_disconnFlashEnd   = 0;
 static uint32_t g_notifyLedMs       = 0;
 
 static float    g_vbatRatio      = VBAT_DEFAULT_RATIO;
@@ -314,9 +312,8 @@ static void wifiConnect()
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
-        apModeActive       = false;
-        g_wifiLostMs       = 0;
-        g_wifiWasConnected = true;
+        apModeActive = false;
+        g_wifiLostMs = 0;
         dnsServer.stop();
         digitalWrite(LED_BUILTIN_PIN, HIGH);
         Serial.printf("[wifi] connected IP=%s\n", WiFi.localIP().toString().c_str());
@@ -331,24 +328,9 @@ static void wifiConnect()
 static void checkWifiState()
 {
     if (apModeActive) return;
-
-    bool connected = (WiFi.status() == WL_CONNECTED);
-
-    // 切断を検知したら 5 秒間 LED 高速点滅
-    if (g_wifiWasConnected && !connected) {
-        g_disconnFlashEnd = millis() + 5000;
-        g_notifyLedMs     = 0;
-        Serial.println("[wifi] disconnected — LED flash 5 s");
-    }
-    g_wifiWasConnected = connected;
-
-    if (connected) { g_wifiLostMs = 0; return; }
-
-    if (g_wifiLostMs == 0) g_wifiLostMs = millis();
-    if (millis() - g_wifiLostMs >= 60000) {
-        g_wifiLostMs = 0;
-        wifiConnect();
-    }
+    if (WiFi.status() == WL_CONNECTED) { g_wifiLostMs = 0; return; }
+    if (g_wifiLostMs == 0) { g_wifiLostMs = millis(); Serial.println("[wifi] disconnected"); }
+    if (millis() - g_wifiLostMs >= 60000) { g_wifiLostMs = 0; wifiConnect(); }
 }
 
 // ── Web handlers ──────────────────────────────────────────────────────────────
@@ -480,7 +462,7 @@ static void updateLed()
 }
 
 // LED_NOTIFY_PIN の全状態を一元管理
-// Priority: AP/切断点滅 > アラーム点灯 > ハートビート > 消灯
+// Priority: AP点滅 > WiFi切断点滅 > アラーム点灯 > ハートビート > 消灯
 static void updateNotifyLed()
 {
     if (!g_ledEnabled) { ledRawOff(); return; }
@@ -496,8 +478,8 @@ static void updateNotifyLed()
         return;
     }
 
-    // WiFi 切断直後 5 s → 高速点滅 80 ms
-    if (now < g_disconnFlashEnd) {
+    // WiFi 未接続（切断中・再接続待ち） → 高速点滅 80 ms（再接続まで継続）
+    if (WiFi.status() != WL_CONNECTED) {
         if (now - g_notifyLedMs >= 80) {
             g_notifyLedMs = now;
             digitalWrite(LED_NOTIFY_PIN, !digitalRead(LED_NOTIFY_PIN));
@@ -508,16 +490,11 @@ static void updateNotifyLed()
     // アラーム中 → 点灯
     if (g_alarmActive) { ledRawOn(); return; }
 
-    // STA 接続中 → ハートビート（2 秒周期のダブルパルス）
-    // ON 80ms → OFF 100ms → ON 80ms → OFF 1740ms
-    if (WiFi.status() == WL_CONNECTED) {
-        uint32_t phase = now % 2000;
-        if (phase < 80 || (phase >= 180 && phase < 260)) ledRawOn();
-        else                                              ledRawOff();
-        return;
-    }
-
-    ledRawOff();
+    // STA 接続中（通常） → ハートビート（2 秒周期のダブルパルス）
+    // 第1拍: ON 80ms → OFF 100ms → 第2拍: ON 80ms → 休止 1740ms
+    uint32_t phase = now % 2000;
+    if (phase < 80 || (phase >= 180 && phase < 260)) ledRawOn();
+    else                                              ledRawOff();
 }
 
 // ── Arduino entry points ──────────────────────────────────────────────────────
