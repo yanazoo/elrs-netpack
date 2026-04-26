@@ -488,17 +488,18 @@ static void updateNotifyLed()
     // 電圧アラーム → 全輝度点灯
     if (g_alarmActive) { nlWrite(255); return; }
 
-    // 通常（STA 接続中）→ PWM ハートビート（2 秒周期・ダブルパルス）
-    // 第1拍: 0-100ms 立ち上がり(0→255) → 100-350ms フェードアウト(255→0)
-    // 第2拍: 450-550ms 立ち上がり(0→255) → 550-800ms フェードアウト(255→0)
+    // 通常（STA 接続中）→ PWM ハートビート（2 秒周期・ダブルパルス、うっすら発光）
+    // 第1拍: 0-100ms 立ち上がり(0→80) → 100-350ms フェードアウト(80→0)
+    // 第2拍: 450-550ms 立ち上がり(0→80) → 550-800ms フェードアウト(80→0)
     // 休止 : 800-2000ms（消灯）
+    static const uint8_t HB_PEAK = 80;
     uint32_t phase = now % 2000;
     uint8_t  bri   = 0;
-    if      (phase < 100)  bri = (uint8_t)(phase          * 255 / 100);
-    else if (phase < 350)  bri = (uint8_t)((350 - phase)  * 255 / 250);
+    if      (phase < 100)  bri = (uint8_t)(phase          * HB_PEAK / 100);
+    else if (phase < 350)  bri = (uint8_t)((350 - phase)  * HB_PEAK / 250);
     else if (phase < 450)  bri = 0;
-    else if (phase < 550)  bri = (uint8_t)((phase - 450)  * 255 / 100);
-    else if (phase < 800)  bri = (uint8_t)((800 - phase)  * 255 / 250);
+    else if (phase < 550)  bri = (uint8_t)((phase - 450)  * HB_PEAK / 100);
+    else if (phase < 800)  bri = (uint8_t)((800 - phase)  * HB_PEAK / 250);
     else                   bri = 0;
     nlWrite(bri);
 }
