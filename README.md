@@ -137,6 +137,156 @@ If flashing fails, enter bootloader mode:
 
 ---
 
+## elrs-xiao-webui — Enhanced XIAO Firmware (Web UI Edition)
+
+`elrs-xiao-webui/` is an enhanced replacement for `elrs-xiao-bridge/` that adds a **Web UI, captive portal, battery voltage monitor, buzzer, and LED notifications** while keeping the full TCP MSP bridge functionality.
+
+> Flash **either** `elrs-xiao-bridge/` **or** `elrs-xiao-webui/` to the XIAO — not both.
+
+---
+
+### Additional Hardware (elrs-xiao-webui)
+
+| Part | Notes |
+|---|---|
+| Passive buzzer | Connected across GPIO4(+) and GPIO6(−) |
+| 7-color auto-cycling LED | GPIO9 (D10) + **100 Ω resistor** in series |
+| 2× 100 kΩ resistor | Voltage divider for LiPo monitoring (optional) |
+| LiPo battery | 1S recommended (shared power with ESP32 Wrover-E) |
+
+---
+
+### Additional Wiring (elrs-xiao-webui)
+
+| XIAO GPIO | Pin label | Connected to |
+|---|---|---|
+| GPIO3 | D2 / A0 | Voltage divider midpoint (LiPo+ → R1 100kΩ → GPIO3 → R2 100kΩ → GND) |
+| GPIO4 | D3 | Buzzer positive (+) |
+| GPIO6 | D5 | Buzzer negative (−) |
+| GPIO9 | D10 | LED anode (+ 100 Ω → GND) |
+| GPIO21 | — | Built-in LED (active-LOW, onboard) |
+
+> **Important:** Always use a **100 Ω** series resistor with the notification LED to protect GPIO9.
+
+---
+
+### Flash XIAO ESP32-S3 (`elrs-xiao-webui/`)
+
+1. Open the folder in VS Code:
+   **File → Open Folder → `elrs-xiao-webui/`**
+2. Wait for PlatformIO to install packages (first time only)
+3. Connect XIAO via USB-C
+4. PlatformIO sidebar → **`xiao_esp32s3` → General → Upload**
+
+If a specific COM port is needed, add to `platformio.ini`:
+```ini
+upload_port = COM3   ; change to your port number
+```
+
+If flashing fails, enter bootloader mode:
+```
+① Hold BOOT button
+② Press and release RST
+③ Release BOOT
+```
+
+**Expected serial output (first boot — WiFi not configured):**
+```
+[boot] XIAO ESP32-S3 WiFi bridge + Web UI
+[wifi] not configured — starting captive portal immediately
+[ap] IP=192.168.4.1
+[web] HTTP server on port 80
+[boot] ready
+```
+
+---
+
+### Features (elrs-xiao-webui)
+
+| Feature | Description |
+|---|---|
+| TCP MSP bridge | Same as `elrs-xiao-bridge` — full compatibility |
+| Web UI | Dark-theme settings page at `http://elrs-netpack.local` |
+| Language toggle | JP / EN switchable from any page |
+| RSSI display | WiFi signal strength shown in real time |
+| Captive portal | AP mode on first boot or failed WiFi; browser opens automatically |
+| mDNS | Accessible as `elrs-netpack.local` on local network |
+| WiFi settings | SSID / password saved to NVS (flash) |
+| Voltage monitor | LiPo voltage via ADC with configurable divider ratio |
+| Voltage alarm | Buzzer + LED alert when voltage drops below threshold |
+| Buzzer | Double-beep on WiFi connect; short beep on settings save |
+| Notification LED | 7-color auto-cycling LED with PWM brightness control |
+| Fast reconnect | Immediate `WiFi.reconnect()` on disconnect; 15 s before full retry |
+| Max TX power | 21 dBm (both WiFi and ESP-NOW sides) |
+| Backpack version | Reports firmware version 10.1 to RotorHazard |
+
+---
+
+### Web UI Pages
+
+**`/wifi` — WiFi Settings**
+- Enter SSID and password → save and connect
+- Leave password blank to keep existing password
+
+**`/voltage` — Voltage Monitor**
+- Displays current LiPo voltage
+- Divider ratio: set to `2.0` for equal resistors (100 kΩ + 100 kΩ)
+- Alarm threshold: default 3.5 V (1S LiPo low-voltage warning)
+- Enable / disable voltage alarm independently
+- Enable / disable buzzer independently
+- Enable / disable notification LED independently
+
+---
+
+### LED Behavior (GPIO9 — 7-color auto-cycling)
+
+| State | Pattern |
+|---|---|
+| AP mode (needs configuration) | Slow blink 500 ms |
+| WiFi disconnected | Rapid blink 80 ms (until reconnected) |
+| Voltage alarm active | Solid on |
+| STA connected (normal) | Heartbeat double-pulse, peak brightness ~4%, 2 s period |
+| LED disabled (setting) | Off |
+
+### Built-in LED Behavior (GPIO21 — active-LOW)
+
+| State | Pattern |
+|---|---|
+| Connecting to WiFi | On (solid) |
+| AP mode | Blink 200 ms |
+| STA connected | Off |
+
+---
+
+### NVS Stored Settings
+
+All settings survive power cycles (stored in ESP32 flash via Preferences).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `ssid` | String | `ELRS-Netpack-Setup` | WiFi SSID |
+| `wifiPass` | String | `elrs-netpack` | WiFi password |
+| `configured` | Bool | false | Skip STA on first boot if false |
+| `vbatRatio` | Float | 2.0 | Voltage divider ratio |
+| `alarmV` | Float | 3.5 | Alarm threshold (V) |
+| `vbatAlarmEn` | Bool | false | Voltage alarm enabled |
+| `buzzerEn` | Bool | true | Buzzer enabled |
+| `ledEn` | Bool | true | Notification LED enabled |
+| `langJa` | Bool | true | Language (true = Japanese) |
+
+---
+
+### Default AP Credentials (elrs-xiao-webui)
+
+| | Value |
+|---|---|
+| SSID | `ELRS-Netpack-Setup` |
+| Password | `elrs-netpack` |
+| IP | `192.168.4.1` |
+| Settings URL | `http://192.168.4.1/` |
+
+---
+
 ## RotorHazard Plugin
 
 Install the following plugin on your Raspberry Pi to enable ELRS backpack communication from RotorHazard:
