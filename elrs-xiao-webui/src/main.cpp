@@ -492,7 +492,7 @@ static void updateNotifyLed()
     // 第1拍: 0-100ms 立ち上がり(0→80) → 100-350ms フェードアウト(80→0)
     // 第2拍: 450-550ms 立ち上がり(0→80) → 550-800ms フェードアウト(80→0)
     // 休止 : 800-2000ms（消灯）
-    static const uint8_t HB_PEAK = 80;
+    static const uint8_t HB_PEAK = 10;
     uint32_t phase = now % 2000;
     uint8_t  bri   = 0;
     if      (phase < 100)  bri = (uint8_t)(phase          * HB_PEAK / 100);
