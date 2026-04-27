@@ -555,19 +555,9 @@ void loop()
     updateVoltage();
     updateNotifyLed();
 
-    // TCP クライアント管理: 切断検知 → stop() でソケット解放 → 再接続待ち
-    if (tcpClient && !tcpClient.connected()) {
-        Serial.println("[tcp] client disconnected — waiting for reconnect");
-        tcpClient.stop();
-        mspFromTcp = MSP();  // パーサーをリセットして次の接続に備える
-    }
-    if (!tcpClient) {
+    if (!tcpClient || !tcpClient.connected()) {
         WiFiClient c = tcpServer.available();
-        if (c) {
-            tcpClient = c;
-            mspFromTcp = MSP();
-            Serial.println("[tcp] client connected");
-        }
+        if (c) { tcpClient = c; Serial.println("[tcp] client connected"); }
     }
 
     if (tcpClient && tcpClient.connected()) {
