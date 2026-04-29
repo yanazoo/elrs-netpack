@@ -119,7 +119,8 @@ static void sendOsdReset()
     pkt.reset();
     pkt.makeCommand();
     pkt.function    = MSP_ELRS_SET_OSD;
-    pkt.payloadSize = 0;
+    pkt.payloadSize = 1;
+    pkt.payload[0]  = 0;  // null-terminated empty string → OSD clear
     MSP msp;
     uint8_t size = msp.getTotalPacketSize(&pkt);
     uint8_t buf[size];
