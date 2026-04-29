@@ -719,6 +719,9 @@ void loop()
             tcpClient = c;
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
+            // 新セッション開始: メモリ上の UID リストをリセット（NVS は保持）
+            // RotorHazard が接続後に各パイロットの UID を再送するので自然に蓄積される
+            g_peerUidCount = 0;
             Serial.println("[tcp] session started");
             beepShort();
         }
