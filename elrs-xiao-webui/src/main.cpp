@@ -33,6 +33,7 @@ static bool     g_tcpSessionActive  = false;  // 現在 TCP セッション中�
 static bool     g_tcpEverConnected  = false;  // 一度でも TCP 接続したか
 static bool     g_wifiBuzzerActive  = false;  // WiFi 切断警告ブザー中か
 static uint32_t g_wifiBuzzerStartMs = 0;
+static uint8_t  g_peerUid[6]        = {0};    // MSP_ELRS_SET_SEND_UID で受信した UID
 
 static Led      builtinLed;   // GPIO21 active-LOW (Led クラス)
 // LED_NOTIFY_PIN (GPIO9) は analogWrite で PWM 輝度制御
@@ -119,8 +120,11 @@ static void sendOsdReset()
     pkt.reset();
     pkt.makeCommand();
     pkt.function    = MSP_ELRS_SET_OSD;
-    pkt.payloadSize = 1;
-    pkt.payload[0]  = 0;  // null-terminated empty string → OSD clear
+    pkt.payloadSize = 54;
+    memset(pkt.payload, 0, 54);
+    pkt.payload[0] = 0x03;  // packet type (matches RotorHazard format)
+    pkt.payload[1] = 0x00;  // row count 0 = clear OSD
+    memcpy(&pkt.payload[2], g_peerUid, 6);  // UID / bind phrase hash
     MSP msp;
     uint8_t size = msp.getTotalPacketSize(&pkt);
     uint8_t buf[size];
@@ -168,6 +172,18 @@ static void handlePacketFromTcp(mspPacket_t *pkt)
     }
     if (pkt->function == MSP_ELRS_BACKPACK_SET_BUZZER)
         beepShort();
+    // UID を保存（NVS にも永続化）
+    if (pkt->function == MSP_ELRS_SET_SEND_UID
+        && pkt->payloadSize >= 7 && pkt->payload[0] == 0x01) {
+        memcpy(g_peerUid, &pkt->payload[1], 6);
+        g_peerUid[0] &= ~0x01;  // clear multicast bit
+        prefs.begin("elrs", false);
+        prefs.putBytes("peerUid", g_peerUid, 6);
+        prefs.end();
+        Serial.printf("[uid] saved [%d,%d,%d,%d,%d,%d]\n",
+            g_peerUid[0], g_peerUid[1], g_peerUid[2],
+            g_peerUid[3], g_peerUid[4], g_peerUid[5]);
+    }
     sendMspToUart(pkt);
 }
 
@@ -527,6 +543,7 @@ static void loadPrefs()
     g_buzzerEnabled    = prefs.getBool("buzzerEn",    true);
     g_ledEnabled       = prefs.getBool("ledEn",       true);
     g_langJa           = prefs.getBool("langJa",      true);
+    prefs.getBytes("peerUid", g_peerUid, 6);  // 最後に受信した UID を復元
     prefs.end();
 }
 
