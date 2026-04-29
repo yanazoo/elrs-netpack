@@ -317,6 +317,11 @@ static void startNetServices()
 
 static void wifiConnect()
 {
+    // WiFi 切断に伴う TCP 切断はユーザー起因 → beepLong3 を鳴らさず静かにクリア
+    g_tcpSessionActive = false;
+    g_tcpEverConnected = false;
+    tcpClient.stop();
+
     prefs.begin("elrs", true);
     String ssid       = prefs.getString("ssid",     WIFI_SSID);
     String pass       = prefs.getString("wifiPass", WIFI_PASSWORD);
@@ -374,6 +379,10 @@ static void checkWifiState()
         g_wifiLostMs = millis();
         WiFi.reconnect();
         Serial.println("[wifi] disconnected — reconnecting immediately");
+        // WiFi 切断起因の TCP 切断 → beepLong3 を鳴らさず静かにクリア
+        g_tcpSessionActive = false;
+        g_tcpEverConnected = false;
+        tcpClient.stop();
         // 5 秒間の警告ブザー開始（電圧アラーム中は重複を避ける）
         if (g_buzzerEnabled && !g_alarmActive) {
             buzzerRawOn();
