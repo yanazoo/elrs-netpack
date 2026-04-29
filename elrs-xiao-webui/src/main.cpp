@@ -113,6 +113,21 @@ static void updateWifiBuzzer()
 
 // ── MSP bridge helpers ────────────────────────────────────────────────────────
 
+static void sendOsdReset()
+{
+    mspPacket_t pkt;
+    pkt.reset();
+    pkt.makeCommand();
+    pkt.function    = MSP_ELRS_SET_OSD;
+    pkt.payloadSize = 0;
+    MSP msp;
+    uint8_t size = msp.getTotalPacketSize(&pkt);
+    uint8_t buf[size];
+    if (msp.convertToByteArray(&pkt, buf))
+        uart.write(buf, size);
+    Serial.println("[osd] reset sent");
+}
+
 static void sendMspToTcp(mspPacket_t *pkt)
 {
     if (!tcpClient || !tcpClient.connected()) return;
@@ -391,6 +406,7 @@ static void checkWifiState()
         g_tcpSessionActive = false;
         g_tcpEverConnected = false;
         tcpClient.stop();
+        sendOsdReset();
         // 5 秒間の警告ブザー開始（電圧アラーム中は重複を避ける）
         if (g_buzzerEnabled && !g_alarmActive) {
             buzzerRawOn();
@@ -642,6 +658,7 @@ void loop()
     if (g_tcpSessionActive && (!tcpClient || !tcpClient.connected())) {
         g_tcpSessionActive = false;
         Serial.println("[tcp] session lost");
+        sendOsdReset();
         beepLong3();
     }
     // 新規クライアント受け付け
