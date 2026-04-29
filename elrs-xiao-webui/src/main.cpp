@@ -29,6 +29,11 @@ static DNSServer   dnsServer;
 static bool     apModeActive        = false;
 static uint32_t g_wifiLostMs        = 0;
 
+static bool     g_tcpSessionActive  = false;  // 現在 TCP セッション中か
+static bool     g_tcpEverConnected  = false;  // 一度でも TCP 接続したか
+static bool     g_wifiBuzzerActive  = false;  // WiFi 切断警告ブザー中か
+static uint32_t g_wifiBuzzerStartMs = 0;
+
 static Led      builtinLed;   // GPIO21 active-LOW (Led クラス)
 // LED_NOTIFY_PIN (GPIO9) は analogWrite で PWM 輝度制御
 static inline void nlWrite(uint8_t duty) { analogWrite(LED_NOTIFY_PIN, duty); }
@@ -80,6 +85,29 @@ static void beepDouble()
         buzzerRawOff();
         nlWrite(0);
         if (i == 0) delay(120);
+    }
+}
+
+// TCP セッション切断警告: 長いビープ 3 回
+static void beepLong3()
+{
+    for (int i = 0; i < 3; i++) {
+        if (g_buzzerEnabled) buzzerRawOn();
+        if (g_ledEnabled)    nlWrite(255);
+        delay(500);
+        buzzerRawOff();
+        nlWrite(0);
+        if (i < 2) delay(200);
+    }
+}
+
+// WiFi 切断ブザーの 5 秒タイムアウト管理
+static void updateWifiBuzzer()
+{
+    if (!g_wifiBuzzerActive) return;
+    if (millis() - g_wifiBuzzerStartMs >= 5000) {
+        buzzerRawOff();
+        g_wifiBuzzerActive = false;
     }
 }
 
@@ -266,6 +294,7 @@ static String pageVoltage(const String &msg = "")
 
 static void startCaptivePortal()
 {
+    if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
     WiFi.mode(WIFI_AP);
     esp_wifi_set_max_tx_power(84);
     WiFi.softAP(ap_ssid, ap_password);
@@ -316,6 +345,7 @@ static void wifiConnect()
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
+        if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
         apModeActive = false;
         g_wifiLostMs = 0;
         dnsServer.stop();
@@ -332,11 +362,24 @@ static void wifiConnect()
 static void checkWifiState()
 {
     if (apModeActive) return;
-    if (WiFi.status() == WL_CONNECTED) { g_wifiLostMs = 0; return; }
+    if (WiFi.status() == WL_CONNECTED) {
+        if (g_wifiLostMs != 0) {
+            // WiFi 復旧 → ブザー即停止
+            if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
+        }
+        g_wifiLostMs = 0;
+        return;
+    }
     if (g_wifiLostMs == 0) {
         g_wifiLostMs = millis();
-        WiFi.reconnect();  // 即時再接続を試みる（高速パス）
+        WiFi.reconnect();
         Serial.println("[wifi] disconnected — reconnecting immediately");
+        // 5 秒間の警告ブザー開始（電圧アラーム中は重複を避ける）
+        if (g_buzzerEnabled && !g_alarmActive) {
+            buzzerRawOn();
+            g_wifiBuzzerActive  = true;
+            g_wifiBuzzerStartMs = millis();
+        }
     }
     // 15 秒経っても復帰しなければ完全再接続シーケンスへ
     if (millis() - g_wifiLostMs >= 15000) { g_wifiLostMs = 0; wifiConnect(); }
@@ -485,6 +528,12 @@ static void updateNotifyLed()
         return;
     }
 
+    // TCP セッション切断（一度接続後に切れた場合）→ 300ms 中速点滅
+    if (!g_tcpSessionActive && g_tcpEverConnected) {
+        nlWrite((now % 600 < 300) ? 255 : 0);
+        return;
+    }
+
     // 電圧アラーム → 全輝度点灯
     if (g_alarmActive) { nlWrite(255); return; }
 
@@ -549,15 +598,29 @@ void setup()
 void loop()
 {
     checkWifiState();
+    updateWifiBuzzer();
     if (apModeActive) dnsServer.processNextRequest();
     webServer.handleClient();
     updateLed();
     updateVoltage();
     updateNotifyLed();
 
+    // TCP セッション切断検知
+    if (g_tcpSessionActive && (!tcpClient || !tcpClient.connected())) {
+        g_tcpSessionActive = false;
+        Serial.println("[tcp] session lost");
+        beepLong3();
+    }
+    // 新規クライアント受け付け
     if (!tcpClient || !tcpClient.connected()) {
         WiFiClient c = tcpServer.available();
-        if (c) { tcpClient = c; Serial.println("[tcp] client connected"); }
+        if (c) {
+            tcpClient = c;
+            g_tcpSessionActive = true;
+            g_tcpEverConnected = true;
+            Serial.println("[tcp] session started");
+            beepDouble();
+        }
     }
 
     if (tcpClient && tcpClient.connected()) {
