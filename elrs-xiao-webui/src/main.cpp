@@ -143,7 +143,7 @@ static void sendOsdReset()
         osd_pkt.payloadSize = 54;
         memset(osd_pkt.payload, 0, 54);
         osd_pkt.payload[0] = 0x03;
-        osd_pkt.payload[1] = 0x00;  // row count 0 = clear OSD
+        osd_pkt.payload[1] = 0x02;  // RotorHazard と同じ行数、テキストは全ゼロ（空白表示）
         memcpy(&osd_pkt.payload[2], g_peerUids[p], 6);
         {
             MSP m; uint8_t s = m.getTotalPacketSize(&osd_pkt);
