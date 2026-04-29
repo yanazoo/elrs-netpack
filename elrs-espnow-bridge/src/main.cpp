@@ -107,6 +107,11 @@ static void handlePacketFromS3(mspPacket_t *pkt)
     default:
     {
         // Forward all other MSP packets via ESP-NOW to the backpack
+        if (pkt->function == MSP_ELRS_SET_OSD) {
+            Serial.printf("[debug] OSD payload(%d):", pkt->payloadSize);
+            for (int i = 0; i < pkt->payloadSize; i++) Serial.printf(" %02X", pkt->payload[i]);
+            Serial.println();
+        }
         if (!isNonZero(sendAddress))
         {
             Serial.printf("[espnow] no peer yet, drop MSP 0x%04X\n", pkt->function);
