@@ -369,13 +369,8 @@ static void checkWifiState()
     if (apModeActive) return;
     if (WiFi.status() == WL_CONNECTED) {
         if (g_wifiLostMs != 0) {
-            // WiFi 復旧 → ブザー即停止 + TCP サーバー・mDNS 再起動
+            // WiFi 復旧 → ブザー即停止
             if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
-            g_wifiLostMs = 0;
-            Serial.printf("[wifi] reconnected IP=%s\n", WiFi.localIP().toString().c_str());
-            startNetServices();
-            beepDouble();
-            return;
         }
         g_wifiLostMs = 0;
         return;
