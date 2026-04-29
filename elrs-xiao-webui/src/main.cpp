@@ -367,6 +367,7 @@ static void wifiConnect()
 static void checkWifiState()
 {
     if (apModeActive) return;
+
     if (WiFi.status() == WL_CONNECTED) {
         if (g_wifiLostMs != 0) {
             // WiFi 復旧 → ブザー即停止 + TCP サーバー・mDNS 再起動
@@ -374,16 +375,18 @@ static void checkWifiState()
             g_wifiLostMs = 0;
             Serial.printf("[wifi] reconnected IP=%s\n", WiFi.localIP().toString().c_str());
             startNetServices();
-            return;
         }
-        g_wifiLostMs = 0;
         return;
     }
+
+    uint32_t now = millis();
+    static uint32_t lastReconnectMs = 0;
+
     if (g_wifiLostMs == 0) {
-        g_wifiLostMs = millis();
-        WiFi.reconnect();
-        Serial.println("[wifi] disconnected — reconnecting immediately");
-        // WiFi 切断起因の TCP 切断 → beepLong3 を鳴らさず静かにクリア
+        g_wifiLostMs    = now;
+        lastReconnectMs = now;
+        Serial.println("[wifi] disconnected — reconnecting");
+        // WiFi 切断起因の TCP 切断は静かにクリア
         g_tcpSessionActive = false;
         g_tcpEverConnected = false;
         tcpClient.stop();
@@ -391,11 +394,27 @@ static void checkWifiState()
         if (g_buzzerEnabled && !g_alarmActive) {
             buzzerRawOn();
             g_wifiBuzzerActive  = true;
-            g_wifiBuzzerStartMs = millis();
+            g_wifiBuzzerStartMs = now;
         }
+        WiFi.reconnect();
+        return;
     }
-    // 15 秒経っても復帰しなければ完全再接続シーケンスへ
-    if (millis() - g_wifiLostMs >= 15000) { g_wifiLostMs = 0; wifiConnect(); }
+
+    // 60 秒経過 → AP モード
+    if (now - g_wifiLostMs >= 60000) {
+        if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
+        g_wifiLostMs = 0;
+        Serial.println("[wifi] 60 s without connection — starting captive portal");
+        startCaptivePortal();
+        return;
+    }
+
+    // 10 秒ごとに再接続を試みる
+    if (now - lastReconnectMs >= 10000) {
+        lastReconnectMs = now;
+        Serial.println("[wifi] retrying reconnect");
+        WiFi.reconnect();
+    }
 }
 
 // ── Web handlers ──────────────────────────────────────────────────────────────
