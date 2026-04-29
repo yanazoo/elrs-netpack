@@ -194,24 +194,18 @@ static void handlePacketFromTcp(mspPacket_t *pkt)
     }
     if (pkt->function == MSP_ELRS_BACKPACK_SET_BUZZER)
         beepShort();
-    // UID を保存（重複除外・最大8件・NVS 永続化）
+    // UID を蓄積（重複除外・最大8件・メモリのみ）
     if (pkt->function == MSP_ELRS_SET_SEND_UID
         && pkt->payloadSize >= 7 && pkt->payload[0] == 0x01) {
         uint8_t uid[6];
         memcpy(uid, &pkt->payload[1], 6);
-        uid[0] &= ~0x01;  // clear multicast bit
+        uid[0] &= ~0x01;
         bool known = false;
         for (int i = 0; i < g_peerUidCount; i++)
             if (memcmp(g_peerUids[i], uid, 6) == 0) { known = true; break; }
         if (!known && g_peerUidCount < 8) {
             memcpy(g_peerUids[g_peerUidCount++], uid, 6);
-            prefs.begin("elrs", false);
-            prefs.putBytes("peerUids", g_peerUids, g_peerUidCount * 6);
-            prefs.putUChar("uidCount",  g_peerUidCount);
-            prefs.end();
-            Serial.printf("[uid] saved pilot %d [%d,%d,%d,%d,%d,%d]\n",
-                g_peerUidCount - 1,
-                uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
+            Serial.printf("[uid] pilot %d registered\n", g_peerUidCount - 1);
         }
     }
     sendMspToUart(pkt);
@@ -573,10 +567,6 @@ static void loadPrefs()
     g_buzzerEnabled    = prefs.getBool("buzzerEn",    true);
     g_ledEnabled       = prefs.getBool("ledEn",       true);
     g_langJa           = prefs.getBool("langJa",      true);
-    g_peerUidCount = prefs.getUChar("uidCount", 0);
-    if (g_peerUidCount > 8) g_peerUidCount = 8;
-    if (g_peerUidCount > 0)
-        prefs.getBytes("peerUids", g_peerUids, g_peerUidCount * 6);
     prefs.end();
 }
 
