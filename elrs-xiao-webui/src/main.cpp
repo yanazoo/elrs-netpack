@@ -91,7 +91,7 @@ static void beepDouble()
 // TCP セッション切断警告: 長いビープ 3 回
 static void beepLong3()
 {
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 5; i++) {
         if (g_buzzerEnabled) buzzerRawOn();
         if (g_ledEnabled)    nlWrite(255);
         delay(500);
