@@ -632,7 +632,7 @@ void loop()
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
             Serial.println("[tcp] session started");
-            beepDouble();
+            beepShort();
         }
     }
 
