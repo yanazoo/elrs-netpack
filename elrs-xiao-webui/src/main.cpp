@@ -117,42 +117,20 @@ static void updateWifiBuzzer()
 
 static void sendOsdReset()
 {
-    if (g_peerUidCount == 0) return;
-
-    for (int p = 0; p < g_peerUidCount; p++) {
-        // Wrover-E に対象パイロットの UID をセット
-        mspPacket_t uid_pkt;
-        uid_pkt.reset();
-        uid_pkt.makeCommand();
-        uid_pkt.function    = MSP_ELRS_SET_SEND_UID;
-        uid_pkt.payloadSize = 7;
-        uid_pkt.payload[0]  = 0x01;
-        memcpy(&uid_pkt.payload[1], g_peerUids[p], 6);
-        {
-            MSP m; uint8_t s = m.getTotalPacketSize(&uid_pkt);
-            uint8_t b[s];
-            if (m.convertToByteArray(&uid_pkt, b)) uart.write(b, s);
-        }
-        delay(15);  // Wrover-E の ESP-NOW reinit を待つ
-
-        // OSD クリアパケット送信
-        mspPacket_t osd_pkt;
-        osd_pkt.reset();
-        osd_pkt.makeCommand();
-        osd_pkt.function    = MSP_ELRS_SET_OSD;
-        osd_pkt.payloadSize = 54;
-        memset(osd_pkt.payload, 0, 54);
-        osd_pkt.payload[0] = 0x03;
-        osd_pkt.payload[1] = 0x02;  // RotorHazard と同じ行数、テキストは全ゼロ（空白表示）
-        memcpy(&osd_pkt.payload[2], g_peerUids[p], 6);
-        {
-            MSP m; uint8_t s = m.getTotalPacketSize(&osd_pkt);
-            uint8_t b[s];
-            if (m.convertToByteArray(&osd_pkt, b)) uart.write(b, s);
-        }
-        Serial.printf("[osd] reset → pilot %d\n", p);
-        delay(15);
-    }
+    mspPacket_t pkt;
+    pkt.reset();
+    pkt.makeCommand();
+    pkt.function    = MSP_ELRS_SET_OSD;
+    pkt.payloadSize = 54;
+    memset(pkt.payload, 0, 54);
+    pkt.payload[0] = 0x03;
+    pkt.payload[1] = 0x02;  // RotorHazard と同じ行数、テキストは全ゼロ
+    MSP msp;
+    uint8_t size = msp.getTotalPacketSize(&pkt);
+    uint8_t buf[size];
+    if (msp.convertToByteArray(&pkt, buf))
+        uart.write(buf, size);
+    Serial.println("[osd] reset sent");
 }
 
 static void sendMspToTcp(mspPacket_t *pkt)
