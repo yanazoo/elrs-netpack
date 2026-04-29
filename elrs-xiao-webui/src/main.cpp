@@ -375,6 +375,7 @@ static void checkWifiState()
             g_wifiLostMs = 0;
             Serial.printf("[wifi] reconnected IP=%s\n", WiFi.localIP().toString().c_str());
             startNetServices();
+            beepDouble();
         }
         return;
     }
