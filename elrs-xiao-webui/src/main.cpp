@@ -33,7 +33,8 @@ static bool     g_tcpSessionActive  = false;  // 現在 TCP セッション中�
 static bool     g_tcpEverConnected  = false;  // 一度でも TCP 接続したか
 static bool     g_wifiBuzzerActive  = false;  // WiFi 切断警告ブザー中か
 static uint32_t g_wifiBuzzerStartMs = 0;
-static uint8_t  g_peerUid[6]        = {0};    // MSP_ELRS_SET_SEND_UID で受信した UID
+static uint8_t  g_peerUids[8][6];             // 最大 8 パイロット分の UID
+static uint8_t  g_peerUidCount = 0;
 
 static Led      builtinLed;   // GPIO21 active-LOW (Led クラス)
 // LED_NOTIFY_PIN (GPIO9) は analogWrite で PWM 輝度制御
@@ -116,21 +117,42 @@ static void updateWifiBuzzer()
 
 static void sendOsdReset()
 {
-    mspPacket_t pkt;
-    pkt.reset();
-    pkt.makeCommand();
-    pkt.function    = MSP_ELRS_SET_OSD;
-    pkt.payloadSize = 54;
-    memset(pkt.payload, 0, 54);
-    pkt.payload[0] = 0x03;  // packet type (matches RotorHazard format)
-    pkt.payload[1] = 0x00;  // row count 0 = clear OSD
-    memcpy(&pkt.payload[2], g_peerUid, 6);  // UID / bind phrase hash
-    MSP msp;
-    uint8_t size = msp.getTotalPacketSize(&pkt);
-    uint8_t buf[size];
-    if (msp.convertToByteArray(&pkt, buf))
-        uart.write(buf, size);
-    Serial.println("[osd] reset sent");
+    if (g_peerUidCount == 0) return;
+
+    for (int p = 0; p < g_peerUidCount; p++) {
+        // Wrover-E に対象パイロットの UID をセット
+        mspPacket_t uid_pkt;
+        uid_pkt.reset();
+        uid_pkt.makeCommand();
+        uid_pkt.function    = MSP_ELRS_SET_SEND_UID;
+        uid_pkt.payloadSize = 7;
+        uid_pkt.payload[0]  = 0x01;
+        memcpy(&uid_pkt.payload[1], g_peerUids[p], 6);
+        {
+            MSP m; uint8_t s = m.getTotalPacketSize(&uid_pkt);
+            uint8_t b[s];
+            if (m.convertToByteArray(&uid_pkt, b)) uart.write(b, s);
+        }
+        delay(15);  // Wrover-E の ESP-NOW reinit を待つ
+
+        // OSD クリアパケット送信
+        mspPacket_t osd_pkt;
+        osd_pkt.reset();
+        osd_pkt.makeCommand();
+        osd_pkt.function    = MSP_ELRS_SET_OSD;
+        osd_pkt.payloadSize = 54;
+        memset(osd_pkt.payload, 0, 54);
+        osd_pkt.payload[0] = 0x03;
+        osd_pkt.payload[1] = 0x00;  // row count 0 = clear OSD
+        memcpy(&osd_pkt.payload[2], g_peerUids[p], 6);
+        {
+            MSP m; uint8_t s = m.getTotalPacketSize(&osd_pkt);
+            uint8_t b[s];
+            if (m.convertToByteArray(&osd_pkt, b)) uart.write(b, s);
+        }
+        Serial.printf("[osd] reset → pilot %d\n", p);
+        delay(15);
+    }
 }
 
 static void sendMspToTcp(mspPacket_t *pkt)
@@ -172,17 +194,25 @@ static void handlePacketFromTcp(mspPacket_t *pkt)
     }
     if (pkt->function == MSP_ELRS_BACKPACK_SET_BUZZER)
         beepShort();
-    // UID を保存（NVS にも永続化）
+    // UID を保存（重複除外・最大8件・NVS 永続化）
     if (pkt->function == MSP_ELRS_SET_SEND_UID
         && pkt->payloadSize >= 7 && pkt->payload[0] == 0x01) {
-        memcpy(g_peerUid, &pkt->payload[1], 6);
-        g_peerUid[0] &= ~0x01;  // clear multicast bit
-        prefs.begin("elrs", false);
-        prefs.putBytes("peerUid", g_peerUid, 6);
-        prefs.end();
-        Serial.printf("[uid] saved [%d,%d,%d,%d,%d,%d]\n",
-            g_peerUid[0], g_peerUid[1], g_peerUid[2],
-            g_peerUid[3], g_peerUid[4], g_peerUid[5]);
+        uint8_t uid[6];
+        memcpy(uid, &pkt->payload[1], 6);
+        uid[0] &= ~0x01;  // clear multicast bit
+        bool known = false;
+        for (int i = 0; i < g_peerUidCount; i++)
+            if (memcmp(g_peerUids[i], uid, 6) == 0) { known = true; break; }
+        if (!known && g_peerUidCount < 8) {
+            memcpy(g_peerUids[g_peerUidCount++], uid, 6);
+            prefs.begin("elrs", false);
+            prefs.putBytes("peerUids", g_peerUids, g_peerUidCount * 6);
+            prefs.putUChar("uidCount",  g_peerUidCount);
+            prefs.end();
+            Serial.printf("[uid] saved pilot %d [%d,%d,%d,%d,%d,%d]\n",
+                g_peerUidCount - 1,
+                uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
+        }
     }
     sendMspToUart(pkt);
 }
@@ -543,7 +573,10 @@ static void loadPrefs()
     g_buzzerEnabled    = prefs.getBool("buzzerEn",    true);
     g_ledEnabled       = prefs.getBool("ledEn",       true);
     g_langJa           = prefs.getBool("langJa",      true);
-    prefs.getBytes("peerUid", g_peerUid, 6);  // 最後に受信した UID を復元
+    g_peerUidCount = prefs.getUChar("uidCount", 0);
+    if (g_peerUidCount > 8) g_peerUidCount = 8;
+    if (g_peerUidCount > 0)
+        prefs.getBytes("peerUids", g_peerUids, g_peerUidCount * 6);
     prefs.end();
 }
 
