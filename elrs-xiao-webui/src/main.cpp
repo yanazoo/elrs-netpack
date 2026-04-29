@@ -676,6 +676,7 @@ void loop()
     // TCP セッション切断検知
     if (g_tcpSessionActive && (!tcpClient || !tcpClient.connected())) {
         g_tcpSessionActive = false;
+        tcpClient.stop();   // TCP リソース解放 → サーバーが即座に新規接続を受け付けられるように
         Serial.println("[tcp] session lost");
         sendOsdReset();
         beepLong3();
