@@ -91,18 +91,6 @@ static void beepDouble()
     }
 }
 
-// TCP セッション切断警告: 長いビープ 3 回
-static void beepLong3()
-{
-    for (int i = 0; i < 5; i++) {
-        if (g_buzzerEnabled) buzzerRawOn();
-        if (g_ledEnabled)    nlWrite(255);
-        delay(500);
-        buzzerRawOff();
-        nlWrite(0);
-        if (i < 2) delay(200);
-    }
-}
 
 // WiFi 切断ブザーの 5 秒タイムアウト管理
 static void updateWifiBuzzer()
@@ -316,13 +304,14 @@ static void startNetServices()
         MDNS.addService("_elrs", "_tcp", TCP_PORT);
         MDNS.addService("http",  "_tcp", 80);
     }
+    tcpServer.stop();   // WiFi 再接続時に古いソケットを明示的に閉じてから再起動
     tcpServer.begin();
     Serial.printf("[tcp] listening on port %d\n", TCP_PORT);
 }
 
 static void wifiConnect()
 {
-    // WiFi 切断に伴う TCP 切断はユーザー起因 → beepLong3 を鳴らさず静かにクリア
+    // WiFi 切断に伴う TCP 切断はユーザー起因 → 静かにクリア
     g_tcpSessionActive = false;
     g_tcpEverConnected = false;
     tcpClient.stop();
@@ -649,7 +638,7 @@ void loop()
         g_tcpSessionActive = false;
         tcpClient.stop();   // TCP リソース解放 → サーバーが即座に新規接続を受け付けられるように
         Serial.println("[tcp] session lost");
-        beepLong3();
+        beepShort();   // 短いビープのみ — LED 点滅は updateNotifyLed() が担当
     }
     // 新規クライアント受け付け
     if (!tcpClient || !tcpClient.connected()) {
