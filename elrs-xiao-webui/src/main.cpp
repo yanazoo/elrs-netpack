@@ -20,6 +20,9 @@ static MSP            mspFromTcp;
 static MSP            mspFromUart;
 static HardwareSerial uart(1);
 
+// 最大 MSP フレームサイズ: '$''X'type(3) + header(5) + payload(64) + crc(1)
+static const uint8_t MSP_FRAME_MAX = 3 + sizeof(mspHeaderV2_t) + MSP_PORT_INBUF_SIZE + 1;
+
 // ── Web / AP globals ──────────────────────────────────────────────────────────
 
 static WebServer   webServer(80);
@@ -118,7 +121,8 @@ static void sendMspToTcp(mspPacket_t *pkt)
     if (!tcpClient || !tcpClient.connected()) return;
     MSP msp;
     uint8_t size = msp.getTotalPacketSize(pkt);
-    uint8_t buf[size];
+    if (size > MSP_FRAME_MAX) return;
+    uint8_t buf[MSP_FRAME_MAX];
     if (msp.convertToByteArray(pkt, buf))
         tcpClient.write(buf, size);
 }
@@ -127,7 +131,8 @@ static void sendMspToUart(mspPacket_t *pkt)
 {
     MSP msp;
     uint8_t size = msp.getTotalPacketSize(pkt);
-    uint8_t buf[size];
+    if (size > MSP_FRAME_MAX) return;
+    uint8_t buf[MSP_FRAME_MAX];
     if (msp.convertToByteArray(pkt, buf))
         uart.write(buf, size);
 }
@@ -605,6 +610,7 @@ void setup()
     // VBAT ピンのみ ADC 設定（全ピン一括は GPIO9 を入力化してしまうため不可）
     analogSetPinAttenuation(VBAT_ADC_PIN, ADC_11db);
 
+    uart.setRxBufferSize(2048);  // ブザー鳴動中（ブロッキング）の取りこぼし防止
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
     loadPrefs();
@@ -652,6 +658,7 @@ void loop()
             tcpClient = c;
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
+            mspFromTcp.markPacketReceived();  // パーサを IDLE に戻し前セッションの残り状態を破棄
             Serial.println("[tcp] session started");
             beepShort();
         }

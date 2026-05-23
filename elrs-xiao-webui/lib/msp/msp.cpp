@@ -40,6 +40,13 @@ bool MSP::processReceivedByte(uint8_t c)
             m_packet.function    = header->function;
             m_packet.flags       = header->flags;
             m_offset = 0;
+            // ペイロード長がバッファを超える場合は破棄（バッファオーバーフロー防止）
+            if (m_packet.payloadSize > MSP_PORT_INBUF_SIZE)
+            {
+                Serial.printf("[msp] payload too large (%u) — dropped\n", m_packet.payloadSize);
+                m_inputState = MSP_IDLE;
+                break;
+            }
             m_inputState = (m_packet.payloadSize == 0) ? MSP_CHECKSUM_V2_NATIVE
                                                         : MSP_PAYLOAD_V2_NATIVE;
         }
