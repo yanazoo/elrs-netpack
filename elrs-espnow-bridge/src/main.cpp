@@ -23,6 +23,9 @@ static uint8_t bindAddress[6] = {0};
 static MSP mspFromS3;      // parse bytes arriving from XIAO over UART
 static MSP mspFromEspnow;  // parse bytes arriving from backpack over ESP-NOW
 
+// 最大 MSP フレームサイズ: '$''X'type(3) + header(5) + payload(64) + crc(1)
+static const uint8_t MSP_FRAME_MAX = 3 + sizeof(mspHeaderV2_t) + MSP_PORT_INBUF_SIZE + 1;
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 static bool isNonZero(const uint8_t *addr)
@@ -114,7 +117,8 @@ static void handlePacketFromS3(mspPacket_t *pkt)
         }
         MSP msp;
         uint8_t size = msp.getTotalPacketSize(pkt);
-        uint8_t buf[size];
+        if (size > MSP_FRAME_MAX) break;
+        uint8_t buf[MSP_FRAME_MAX];
         if (msp.convertToByteArray(pkt, buf))
         {
             esp_err_t err = esp_now_send(sendAddress, buf, size);
@@ -133,6 +137,10 @@ static void handlePacketFromS3(mspPacket_t *pkt)
 void setup()
 {
     Serial.begin(115200);
+    // RX: XIAO からのバースト受信取りこぼし防止
+    // TX: ESP-NOW 受信コールバックからの書き込みが WiFi タスクをブロックしないように
+    Serial2.setRxBufferSize(2048);
+    Serial2.setTxBufferSize(2048);
     Serial2.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
     Serial.println("[boot] ESP32 Wrover-E ESP-NOW bridge");
 
