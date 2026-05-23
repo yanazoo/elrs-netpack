@@ -653,7 +653,7 @@ void loop()
     }
     // 新規クライアント受け付け
     if (!tcpClient || !tcpClient.connected()) {
-        WiFiClient c = tcpServer.available();
+        WiFiClient c = tcpServer.accept();
         if (c) {
             tcpClient = c;
             g_tcpSessionActive = true;
