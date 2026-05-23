@@ -52,13 +52,14 @@ static void reinitEspNow();
 
 // ── ESP-NOW callbacks ─────────────────────────────────────────────────────────
 
-static void onDataSent(const uint8_t *mac, esp_now_send_status_t status)
+// Arduino-ESP32 3.x (ESP-IDF 5.x) でコールバック引数型が変更された
+static void onDataSent(const wifi_tx_info_t *, esp_now_send_status_t status)
 {
     if (status != ESP_NOW_SEND_SUCCESS)
         Serial.println("[espnow] send FAILED");
 }
 
-static void onDataRecv(const uint8_t *mac, const uint8_t *data, int len)
+static void onDataRecv(const esp_now_recv_info_t *, const uint8_t *data, int len)
 {
     // Forward raw bytes to XIAO; it will parse them as MSP
     Serial2.write(data, len);
