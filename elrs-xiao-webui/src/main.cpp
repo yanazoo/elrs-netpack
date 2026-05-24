@@ -6,6 +6,7 @@
 #include <Preferences.h>
 #include <DNSServer.h>
 #include "esp_wifi.h"
+#include <lwip/sockets.h>
 #include "config.h"
 #include "led.h"
 #include "msp.h"
@@ -28,6 +29,7 @@ static DNSServer   dnsServer;
 
 static bool     apModeActive        = false;
 static uint32_t g_wifiLostMs        = 0;
+static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラグ（イベントタスク → loop）
 
 static Led      builtinLed;   // GPIO21 active-LOW (Led クラス)
 // LED_NOTIFY_PIN (GPIO9) は analogWrite で PWM 輝度制御
@@ -81,6 +83,16 @@ static void beepDouble()
         nlWrite(0);
         if (i == 0) delay(120);
     }
+}
+
+// 接続受け入れ時に TCP keepalive を設定（デッドコネクション検出: 5s idle → 2s間隔 × 3回）
+static void setTcpKeepalive(int fd)
+{
+    int yes = 1;
+    setsockopt(fd, SOL_SOCKET,  SO_KEEPALIVE,  &yes, sizeof(yes));
+    int v = 5; setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &v, sizeof(v));
+        v = 2; setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &v, sizeof(v));
+        v = 3; setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &v, sizeof(v));
 }
 
 // ── MSP bridge helpers ────────────────────────────────────────────────────────
@@ -335,6 +347,7 @@ static void checkWifiState()
     if (WiFi.status() == WL_CONNECTED) { g_wifiLostMs = 0; return; }
     if (g_wifiLostMs == 0) {
         g_wifiLostMs = millis();
+        tcpClient.stop();  // WiFi がまだ部分的に生きている間に FIN を送信
         WiFi.reconnect();  // 即時再接続を試みる（高速パス）
         Serial.println("[wifi] disconnected — reconnecting immediately");
     }
@@ -526,6 +539,12 @@ void setup()
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
     loadPrefs();
+
+    // WiFi 切断を即座に検知してフラグを立てる（loop() 先頭で FIN 送信）
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
+        g_wifiLostEvent = true;
+    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+
     wifiConnect();
 
     const char *hdrs[] = {"Referer"};
@@ -548,6 +567,13 @@ void setup()
 
 void loop()
 {
+    // WiFi 切断イベントを最速で処理 — WiFi がまだ部分的に生きている間に FIN を送信
+    if (g_wifiLostEvent) {
+        g_wifiLostEvent = false;
+        tcpClient.stop();
+        Serial.println("[tcp] closed — WiFi lost");
+    }
+
     checkWifiState();
     if (apModeActive) dnsServer.processNextRequest();
     webServer.handleClient();
@@ -557,7 +583,11 @@ void loop()
 
     if (!tcpClient || !tcpClient.connected()) {
         WiFiClient c = tcpServer.available();
-        if (c) { tcpClient = c; Serial.println("[tcp] client connected"); }
+        if (c) {
+            setTcpKeepalive(c.fd());
+            tcpClient = c;
+            Serial.println("[tcp] client connected");
+        }
     }
 
     if (tcpClient && tcpClient.connected()) {
