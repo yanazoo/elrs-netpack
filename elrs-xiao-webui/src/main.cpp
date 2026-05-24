@@ -6,6 +6,7 @@
 #include <Preferences.h>
 #include <DNSServer.h>
 #include "esp_wifi.h"
+#include <lwip/sockets.h>
 #include "config.h"
 #include "led.h"
 #include "msp.h"
@@ -31,6 +32,7 @@ static DNSServer   dnsServer;
 
 static bool     apModeActive        = false;
 static uint32_t g_wifiLostMs        = 0;
+static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラグ（イベントタスク → loop）
 
 static bool     g_tcpSessionActive  = false;  // 現在 TCP セッション中か
 static bool     g_tcpEverConnected  = false;  // 一度でも TCP 接続したか
@@ -91,6 +93,15 @@ static void beepDouble()
     }
 }
 
+// 接続受け入れ時に TCP keepalive を設定（デッドコネクション検出: 5s idle → 2s間隔 × 3回）
+static void setTcpKeepalive(int fd)
+{
+    int yes = 1;
+    setsockopt(fd, SOL_SOCKET,  SO_KEEPALIVE,  &yes, sizeof(yes));
+    int v = 5; setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &v, sizeof(v));
+        v = 2; setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &v, sizeof(v));
+        v = 3; setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &v, sizeof(v));
+}
 
 // WiFi 切断ブザーの 5 秒タイムアウト管理
 static void updateWifiBuzzer()
@@ -603,6 +614,12 @@ void setup()
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
     loadPrefs();
+
+    // WiFi 切断を即座に検知してフラグを立てる（loop() 先頭で FIN 送信）
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
+        g_wifiLostEvent = true;
+    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+
     wifiConnect();
 
     const char *hdrs[] = {"Referer"};
@@ -625,6 +642,13 @@ void setup()
 
 void loop()
 {
+    // WiFi 切断イベントを最速で処理 — WiFi がまだ部分的に生きている間に FIN を送信
+    if (g_wifiLostEvent) {
+        g_wifiLostEvent = false;
+        tcpClient.stop();
+        Serial.println("[tcp] closed — WiFi lost");
+    }
+
     checkWifiState();
     updateWifiBuzzer();
     if (apModeActive) dnsServer.processNextRequest();
@@ -644,6 +668,7 @@ void loop()
     if (!tcpClient || !tcpClient.connected()) {
         WiFiClient c = tcpServer.accept();
         if (c) {
+            setTcpKeepalive(c.fd());
             tcpClient = c;
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
