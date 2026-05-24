@@ -582,7 +582,7 @@ void loop()
     updateNotifyLed();
 
     if (!tcpClient || !tcpClient.connected()) {
-        WiFiClient c = tcpServer.available();
+        WiFiClient c = tcpServer.accept();
         if (c) {
             setTcpKeepalive(c.fd());
             tcpClient = c;
