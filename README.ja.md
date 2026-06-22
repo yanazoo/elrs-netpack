@@ -19,8 +19,8 @@ RotorHazard（Raspberry Pi）
         │  TCP ポート 8080
         ▼
 ┌─────────────────────┐
-│  XIAO ESP32-S3      │  elrs-xiao-bridge/
-│  WiFi STA           │  TCP を受信して UART に転送
+│  XIAO ESP32-S3      │  elrs-xiao-webui/
+│  WiFi STA + Web UI  │  TCP を受信して UART に転送
 │  TCP サーバー + mDNS  │
 └────────┬────────────┘
          │  UART 115200 baud
@@ -81,41 +81,9 @@ ESP32-S3 の 2.4 GHz 無線は 1 つだけです。WiFi STA と ESP-NOW を同�
 
 ## 初期設定
 
-XIAO に書き込む前に `elrs-xiao-bridge/include/config.h` を編集してください：
+XIAO ファームウェア（`elrs-xiao-webui/`）は**ソースの編集が不要**です。WiFi の認証情報は初回起動時のキャプティブポータルから入力します（下記「[XIAO ESP32-S3 の書き込み](#xiao-esp32-s3-の書き込みelrs-xiao-webui)」「[AP モードのデフォルト認証情報](#ap-モードのデフォルト認証情報elrs-xiao-webui)」を参照）。
 
-```cpp
-#define WIFI_SSID     "あなたのSSID"
-#define WIFI_PASSWORD "あなたのパスワード"
-```
-
-> **セキュリティ注意:** `config.h` には WiFi パスワードが含まれています。公開リポジトリにはコミットしないでください。
-
----
-
-## XIAO ESP32-S3 の書き込み（`elrs-xiao-bridge/`）
-
-1. VS Code でフォルダを開く：
-   **ファイル → フォルダーを開く → `elrs-xiao-bridge/`**
-2. PlatformIO がパッケージをインストールするまで待つ（初回のみ）
-3. XIAO を USB-C で接続
-4. PlatformIO サイドバー → **`xiao_esp32s3` → General → Upload**
-
-書き込みに失敗する場合はブートローダーモードで接続：
-```
-① BOOT ボタンを押したまま
-② RST ボタンを押して離す
-③ BOOT ボタンを離す
-```
-
-**正常起動時のシリアル出力：**
-```
-[boot] XIAO ESP32-S3 WiFi bridge
-[wifi] connecting to あなたのSSID
-[wifi] connected, IP=192.168.x.xxx
-[mdns] elrs-netpack.local
-[tcp] listening on port 8080
-[boot] ready
-```
+ESP-NOW 側（`elrs-espnow-bridge/`）も設定不要です。チャンネルは `platformio.ini` の `ESPNOW_CHANNEL`（デフォルト 1）でコンパイル時に固定されます。
 
 ---
 
@@ -136,11 +104,9 @@ XIAO に書き込む前に `elrs-xiao-bridge/include/config.h` を編集して�
 
 ---
 
-## elrs-xiao-webui — XIAO 拡張ファームウェア（Web UI 版）
+## elrs-xiao-webui — XIAO ファームウェア（Web UI 版）
 
-`elrs-xiao-webui/` は `elrs-xiao-bridge/` の機能強化版です。TCP MSP ブリッジ機能をそのまま維持しつつ、**Web UI・キャプティブポータル・バッテリー電圧監視・ブザー・LED 通知**を追加します。
-
-> XIAO には `elrs-xiao-bridge/` **または** `elrs-xiao-webui/` のどちらか一方だけを書き込んでください。
+`elrs-xiao-webui/` が XIAO 用ファームウェアです。完全な TCP MSP ブリッジ機能に加えて、**Web UI・キャプティブポータル・バッテリー電圧監視・ブザー・LED 通知**を備えています。
 
 ---
 
@@ -204,7 +170,7 @@ upload_port = COM3   ; デバイスマネージャーで確認した番号に変
 
 | 機能 | 説明 |
 |---|---|
-| TCP MSP ブリッジ | `elrs-xiao-bridge` と同じ — 完全互換 |
+| TCP MSP ブリッジ | ESP-NOW ボードへの完全な TCP ⇄ UART MSP ブリッジ |
 | Web UI | `http://elrs-netpack.local` にアクセスして設定 |
 | 言語切替 | どのページからでも JP / EN を切替可能 |
 | RSSI 表示 | WiFi 電波強度をリアルタイム表示 |
@@ -215,7 +181,7 @@ upload_port = COM3   ; デバイスマネージャーで確認した番号に変
 | 電圧アラーム | 設定閾値を下回るとブザーと LED で警告 |
 | ブザー通知 | WiFi 接続成功で 2 音、設定保存で 1 音 |
 | 通知 LED | 7 色自動サイクル LED を PWM 輝度制御 |
-| 高速再接続 | 切断直後に即 `WiFi.reconnect()` を実行、15 秒後に完全再接続シーケンスへ |
+| 高速再接続 | ノンブロッキング自動再接続。10 秒ごとに再試行し、60 秒で復帰しなければキャプティブポータルへ |
 | 最大送信出力 | WiFi・ESP-NOW 両側とも 21 dBm |
 | バックパックバージョン | RotorHazard にバージョン 10.1 を報告 |
 
@@ -310,7 +276,7 @@ Settings → ELRS バックパック 一般設定
 
 | 症状 | 対処 |
 |---|---|
-| WiFi AUTH_EXPIRE が繰り返される | `config.h` のパスワードを確認して再書き込み |
+| WiFi AUTH_EXPIRE が繰り返される | パスワード誤り → キャプティブポータル（AP モード）から再入力 |
 | `elrs-netpack.local` が見つからない | XIAO と RPi が同じネットワークか確認。IP アドレス直指定を試す |
 | ESP-NOW send error | ゴーグルのバックパックが起動しているか確認 |
 | OSD がゴーグルに表示されない | ESP-NOW チャンネルがバックパックと一致しているか確認（デフォルト ch 1） |

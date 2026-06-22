@@ -20,8 +20,8 @@ RotorHazard (Raspberry Pi)
         │  TCP port 8080
         ▼
 ┌─────────────────────┐
-│  XIAO ESP32-S3      │  elrs-xiao-bridge/
-│  WiFi STA           │  Receives TCP, forwards via UART
+│  XIAO ESP32-S3      │  elrs-xiao-webui/
+│  WiFi STA + Web UI  │  Receives TCP, forwards via UART
 │  TCP server + mDNS  │
 └────────┬────────────┘
          │  UART 115200 baud
@@ -82,41 +82,9 @@ The ESP32-S3 has one shared 2.4 GHz radio. Running WiFi STA and ESP-NOW simultan
 
 ## Configuration
 
-Before flashing the XIAO, edit `elrs-xiao-bridge/include/config.h`:
+The XIAO firmware (`elrs-xiao-webui/`) needs **no source-file editing**. WiFi credentials are entered through the captive portal on first boot — see [Flash XIAO ESP32-S3](#flash-xiao-esp32-s3-elrs-xiao-webui) and [Default AP Credentials](#default-ap-credentials-elrs-xiao-webui) below.
 
-```cpp
-#define WIFI_SSID     "your_ssid"
-#define WIFI_PASSWORD "your_password"
-```
-
-> **Security note:** `config.h` contains your WiFi password. Do not commit it to a public repository.
-
----
-
-## Flash XIAO ESP32-S3 (`elrs-xiao-bridge/`)
-
-1. Open the folder in VS Code:
-   **File → Open Folder → `elrs-xiao-bridge/`**
-2. Wait for PlatformIO to install packages (first time only)
-3. Connect XIAO via USB-C
-4. PlatformIO sidebar → **`xiao_esp32s3` → General → Upload**
-
-If flashing fails, enter bootloader mode:
-```
-① Hold BOOT button
-② Press and release RST
-③ Release BOOT
-```
-
-**Expected serial output:**
-```
-[boot] XIAO ESP32-S3 WiFi bridge
-[wifi] connecting to your_ssid
-[wifi] connected, IP=192.168.x.xxx
-[mdns] elrs-netpack.local
-[tcp] listening on port 8080
-[boot] ready
-```
+The ESP-NOW side (`elrs-espnow-bridge/`) also needs no configuration; its channel is fixed at compile time via `ESPNOW_CHANNEL` (default 1) in `platformio.ini`.
 
 ---
 
@@ -137,11 +105,9 @@ If flashing fails, enter bootloader mode:
 
 ---
 
-## elrs-xiao-webui — Enhanced XIAO Firmware (Web UI Edition)
+## elrs-xiao-webui — XIAO Firmware (Web UI Edition)
 
-`elrs-xiao-webui/` is an enhanced replacement for `elrs-xiao-bridge/` that adds a **Web UI, captive portal, battery voltage monitor, buzzer, and LED notifications** while keeping the full TCP MSP bridge functionality.
-
-> Flash **either** `elrs-xiao-bridge/` **or** `elrs-xiao-webui/` to the XIAO — not both.
+`elrs-xiao-webui/` is the XIAO firmware. It provides the full TCP MSP bridge plus a **Web UI, captive portal, battery voltage monitor, buzzer, and LED notifications**.
 
 ---
 
@@ -205,7 +171,7 @@ If flashing fails, enter bootloader mode:
 
 | Feature | Description |
 |---|---|
-| TCP MSP bridge | Same as `elrs-xiao-bridge` — full compatibility |
+| TCP MSP bridge | Full TCP ⇄ UART MSP bridge to the ESP-NOW board |
 | Web UI | Dark-theme settings page at `http://elrs-netpack.local` |
 | Language toggle | JP / EN switchable from any page |
 | RSSI display | WiFi signal strength shown in real time |
@@ -216,7 +182,7 @@ If flashing fails, enter bootloader mode:
 | Voltage alarm | Buzzer + LED alert when voltage drops below threshold |
 | Buzzer | Double-beep on WiFi connect; short beep on settings save |
 | Notification LED | 7-color auto-cycling LED with PWM brightness control |
-| Fast reconnect | Immediate `WiFi.reconnect()` on disconnect; 15 s before full retry |
+| Fast reconnect | Non-blocking auto-reconnect; retries every 10 s, falls back to captive portal after 60 s |
 | Max TX power | 21 dBm (both WiFi and ESP-NOW sides) |
 | Backpack version | Reports firmware version 10.1 to RotorHazard |
 
@@ -313,7 +279,7 @@ Settings → ELRS Backpack General
 
 | Symptom | Fix |
 |---|---|
-| WiFi AUTH_EXPIRE loop | Wrong password in `config.h` → re-flash |
+| WiFi AUTH_EXPIRE loop | Wrong password → re-enter it via the captive portal (AP mode) |
 | `elrs-netpack.local` not found | Check XIAO and RPi are on same network; try IP directly |
 | ESP-NOW send error | Confirm goggles backpack is powered on |
 | OSD not appearing | Verify ESP-NOW channel matches backpack (default ch 1) |
