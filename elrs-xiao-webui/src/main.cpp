@@ -66,29 +66,67 @@ static void buzzerRawOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BU
 static void alarmOn()  { if (g_buzzerEnabled) buzzerRawOn(); }
 static void alarmOff() { buzzerRawOff(); }
 
-// 通知ビープ（LED は analogWrite で直接制御、終了後 updateNotifyLed が自動復元）
-static void beepShort()
+// ── 非ブロッキング通知ビープ ───────────────────────────────────────────────
+// loop() を止めずにブザー/LED を鳴らす状態機械。
+// 旧 beepShort/beepDouble/beepLong3 は delay() で最大 ~2.9 秒 loop() を停止させ、
+// その間 UART が読まれず Wrover(ESP-NOW) へ渡す MSP を取りこぼしていた。
+// （WiFi 弱化 → TCP 切断頻発 → beepLong3 多発 → ESP-NOW 不通の主因）
+static struct {
+    bool     active     = false;
+    bool     phaseOn    = false;  // 現在 ON フェーズか
+    uint8_t  pulsesLeft = 0;
+    uint16_t onMs       = 0;
+    uint16_t gapMs      = 0;
+    uint32_t phaseMs    = 0;
+} g_beep;
+
+static void beepStart(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
 {
+    if (pulses == 0) return;
     if (!g_buzzerEnabled && !g_ledEnabled) return;
+    g_beep.active     = true;
+    g_beep.phaseOn    = true;
+    g_beep.pulsesLeft = pulses;
+    g_beep.onMs       = onMs;
+    g_beep.gapMs      = gapMs;
+    g_beep.phaseMs    = millis();
     if (g_buzzerEnabled) buzzerRawOn();
     if (g_ledEnabled)    nlWrite(255);
-    delay(80);
+}
+
+static void beepCancel()
+{
+    if (!g_beep.active) return;
+    g_beep.active = false;
     buzzerRawOff();
     nlWrite(0);
 }
 
-static void beepDouble()
+// loop() 毎回呼ぶ。millis ベースで ON/OFF を進める（delay 不使用）。
+static void updateBeep()
 {
-    if (!g_buzzerEnabled && !g_ledEnabled) return;
-    for (int i = 0; i < 2; i++) {
-        if (g_buzzerEnabled) buzzerRawOn();
-        if (g_ledEnabled)    nlWrite(255);
-        delay(80);
+    if (!g_beep.active) return;
+    uint32_t now = millis();
+    if (g_beep.phaseOn) {
+        if (now - g_beep.phaseMs < g_beep.onMs) return;
         buzzerRawOff();
         nlWrite(0);
-        if (i == 0) delay(120);
+        if (--g_beep.pulsesLeft == 0) { g_beep.active = false; return; }
+        g_beep.phaseOn = false;
+        g_beep.phaseMs = now;
+    } else {
+        if (now - g_beep.phaseMs < g_beep.gapMs) return;
+        g_beep.phaseOn = true;
+        g_beep.phaseMs = now;
+        if (g_buzzerEnabled) buzzerRawOn();
+        if (g_ledEnabled)    nlWrite(255);
     }
 }
+
+// 通知ビープ（呼び出し側はそのまま、内部は非ブロッキング化）
+static inline void beepShort()  { beepStart(1, 80, 0);    }  // 短音 1 回
+static inline void beepDouble() { beepStart(2, 80, 120);  }  // 短音 2 回
+static inline void beepLong3()  { beepStart(5, 500, 200); }  // TCP 切断警告: 長音 5 回
 
 // 接続受け入れ時に TCP keepalive を設定（デッドコネクション検出: 5s idle → 2s間隔 × 3回）
 static void setTcpKeepalive(int fd)
@@ -100,19 +138,6 @@ static void setTcpKeepalive(int fd)
         v = 3; setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &v, sizeof(v));
 }
 
-// TCP セッション切断警告: 長いビープ 3 回
-static void beepLong3()
-{
-    for (int i = 0; i < 5; i++) {
-        if (g_buzzerEnabled) buzzerRawOn();
-        if (g_ledEnabled)    nlWrite(255);
-        delay(500);
-        buzzerRawOff();
-        nlWrite(0);
-        if (i < 2) delay(200);
-    }
-}
-
 // WiFi 切断ブザーの 5 秒タイムアウト管理
 static void updateWifiBuzzer()
 {
@@ -120,7 +145,10 @@ static void updateWifiBuzzer()
     if (millis() - g_wifiBuzzerStartMs >= 5000) {
         buzzerRawOff();
         g_wifiBuzzerActive = false;
+        return;
     }
+    // 通知ビープがブザーを一時的に OFF にした後も、5 秒の鳴動を維持する
+    if (!g_beep.active && g_buzzerEnabled) buzzerRawOn();
 }
 
 // ── MSP bridge helpers ────────────────────────────────────────────────────────
@@ -333,6 +361,7 @@ static void wifiConnect()
     g_tcpSessionActive = false;
     g_tcpEverConnected = false;
     tcpClient.stop();
+    beepCancel();  // この後の接続待ちはブロッキングなので、鳴りっぱなしを防ぐ
 
     prefs.begin("elrs", true);
     String ssid       = prefs.getString("ssid",     WIFI_SSID);
@@ -557,6 +586,7 @@ static void updateLed()
 // ※ g_ledEnabled=false のみ完全消灯。それ以外は NL_MIN を下限に IC 給電を維持
 static void updateNotifyLed()
 {
+    if (g_beep.active) return;           // 通知ビープ中は beeper が LED を制御
     if (!g_ledEnabled) { nlWrite(0); return; }
 
     uint32_t now = millis();
@@ -617,6 +647,9 @@ void setup()
     // VBAT ピンのみ ADC 設定（全ピン一括は GPIO9 を入力化してしまうため不可）
     analogSetPinAttenuation(VBAT_ADC_PIN, ADC_11db);
 
+    // RX バッファを拡張（既定 256B）。loop() が一時的に詰まっても
+    // Wrover からのテレメトリ MSP を取りこぼさないようにする。
+    uart.setRxBufferSize(1024);
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
     loadPrefs();
@@ -656,6 +689,7 @@ void loop()
     }
 
     checkWifiState();
+    updateBeep();
     updateWifiBuzzer();
     if (apModeActive) dnsServer.processNextRequest();
     webServer.handleClient();
