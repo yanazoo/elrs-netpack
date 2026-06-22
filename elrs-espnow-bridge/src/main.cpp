@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_idf_version.h>
 #include "msp.h"
 #include "msptypes.h"
 
@@ -48,14 +49,25 @@ static void registerPeer(const uint8_t *addr)
 static void reinitEspNow();
 
 // ── ESP-NOW callbacks ─────────────────────────────────────────────────────────
-
-static void onDataSent(const uint8_t *mac, esp_now_send_status_t status)
+// コールバックのシグネチャは ESP-IDF / Arduino-ESP32 のバージョンで変化した:
+//   recv: const uint8_t* mac  →  const esp_now_recv_info_t*  (Arduino 3.x / IDF 5.x)
+//   send: const uint8_t* mac  →  const wifi_tx_info_t*       (IDF 5.4+)
+// どちらも第1引数（MAC/送信情報）は未使用なので、型だけ合わせる。
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
+static void onDataSent(const wifi_tx_info_t * /*info*/, esp_now_send_status_t status)
+#else
+static void onDataSent(const uint8_t * /*mac*/, esp_now_send_status_t status)
+#endif
 {
     if (status != ESP_NOW_SEND_SUCCESS)
         Serial.println("[espnow] send FAILED");
 }
 
-static void onDataRecv(const uint8_t *mac, const uint8_t *data, int len)
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+static void onDataRecv(const esp_now_recv_info_t * /*info*/, const uint8_t *data, int len)
+#else
+static void onDataRecv(const uint8_t * /*mac*/, const uint8_t *data, int len)
+#endif
 {
     // Forward raw bytes to XIAO; it will parse them as MSP
     Serial2.write(data, len);
