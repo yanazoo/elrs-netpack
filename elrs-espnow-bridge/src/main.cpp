@@ -20,9 +20,36 @@
 
 static uint8_t sendAddress[6] = {0};
 static uint8_t bindAddress[6] = {0};
+static uint8_t appliedMac[6]  = {0};  // MAC currently applied via esp_wifi_set_mac
+static bool    macApplied     = false;
 
 static MSP mspFromS3;      // parse bytes arriving from XIAO over UART
 static MSP mspFromEspnow;  // parse bytes arriving from backpack over ESP-NOW
+
+// ── ESP-NOW TX queue with retry ──────────────────────────────────────────────
+// esp_now_send は fire-and-forget で、送信失敗（ACK 無し）は捨てられていた。
+// レースクロックは毎秒再送されるが、ラップタイムは 1 回きりの送信なので、
+// 一瞬の電波干渉や ESP-NOW 再初期化と重なるとそのラップは二度と表示されない。
+// → 1 パケットずつ送信し、送信コールバックで失敗を検知したらリトライする。
+#define TX_QUEUE_LEN   16
+#define TX_MAX_TRIES   3
+#define TX_CB_TIMEOUT_MS 50   // コールバック消失時（reinit と重なった等）の保険
+#define MSP_MAX_FRAME  (MSP_PORT_INBUF_SIZE + 9)  // $X< + header(5) + payload + crc
+
+struct TxItem {
+    uint8_t addr[6];
+    uint8_t len;
+    uint8_t tries;
+    uint8_t data[MSP_MAX_FRAME];
+};
+
+static TxItem        txQueue[TX_QUEUE_LEN];
+static uint8_t       txHead     = 0;   // next item to send
+static uint8_t       txCount    = 0;
+static bool          txInFlight = false;
+static uint32_t      txSentMs   = 0;
+static volatile bool txDone     = false;
+static volatile bool txOk       = false;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -59,8 +86,10 @@ static void onDataSent(const wifi_tx_info_t * /*info*/, esp_now_send_status_t st
 static void onDataSent(const uint8_t * /*mac*/, esp_now_send_status_t status)
 #endif
 {
-    if (status != ESP_NOW_SEND_SUCCESS)
-        Serial.println("[espnow] send FAILED");
+    // Only one packet is ever in flight (see pumpTx), so this result
+    // unambiguously belongs to txQueue[txHead].
+    txOk   = (status == ESP_NOW_SEND_SUCCESS);
+    txDone = true;
 }
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -82,6 +111,79 @@ static void reinitEspNow()
     esp_now_register_send_cb(onDataSent);
     esp_now_register_recv_cb(onDataRecv);
     Serial.println("[espnow] (re)initialized");
+}
+
+// ── ESP-NOW TX queue ──────────────────────────────────────────────────────────
+
+static bool enqueueTx(const uint8_t *addr, const uint8_t *data, uint8_t len)
+{
+    if (len > MSP_MAX_FRAME) return false;
+    if (txCount >= TX_QUEUE_LEN)
+    {
+        Serial.println("[espnow] tx queue full, dropping packet");
+        return false;
+    }
+    TxItem &it = txQueue[(txHead + txCount) % TX_QUEUE_LEN];
+    memcpy(it.addr, addr, 6);
+    memcpy(it.data, data, len);
+    it.len   = len;
+    it.tries = 0;
+    txCount++;
+    return true;
+}
+
+// loop() 毎回呼ぶ。1 パケットずつ送信し、失敗したら TX_MAX_TRIES まで再送。
+static void pumpTx()
+{
+    if (txInFlight)
+    {
+        if (!txDone)
+        {
+            if (millis() - txSentMs < TX_CB_TIMEOUT_MS) return;
+            txOk = false;  // callback lost (e.g. reinit while in flight)
+        }
+        txInFlight = false;
+        TxItem &it = txQueue[txHead];
+        if (txOk || it.tries >= TX_MAX_TRIES)
+        {
+            if (!txOk)
+                Serial.printf("[espnow] send FAILED after %d tries\n", it.tries);
+            txHead = (txHead + 1) % TX_QUEUE_LEN;
+            txCount--;
+        }
+        // else: leave item at head — retried below
+    }
+
+    if (txCount == 0) return;
+
+    TxItem &it = txQueue[txHead];
+    it.tries++;
+    txDone   = false;
+    txOk     = false;
+    txSentMs = millis();
+    if (esp_now_send(it.addr, it.data, it.len) == ESP_OK)
+    {
+        txInFlight = true;
+    }
+    else if (it.tries >= TX_MAX_TRIES)
+    {
+        // Immediate API error (e.g. peer not registered) — give up on this one
+        Serial.println("[espnow] send API error, dropping packet");
+        txHead = (txHead + 1) % TX_QUEUE_LEN;
+        txCount--;
+    }
+}
+
+// UID 切り替え前にキューを掃く。切り替えで peer/MAC が変わると
+// 残っていた前パイロット宛のパケットが送信不能になるため。
+static void drainTxQueue(uint32_t timeoutMs)
+{
+    uint32_t start = millis();
+    while (txCount > 0 && millis() - start < timeoutMs)
+    {
+        pumpTx();
+        delay(1);
+    }
 }
 
 // ── MSP packet handler (packets received from XIAO via UART) ─────────────────
@@ -106,13 +208,23 @@ static void handlePacketFromS3(mspPacket_t *pkt)
 
         if (isNonZero(sendAddress))
         {
-            // Change this ESP32's WiFi MAC to impersonate the TX backpack
-            esp_wifi_set_mac(WIFI_IF_STA, sendAddress);
-            reinitEspNow();
-            registerPeer(sendAddress);
-            Serial.printf("[uid] set to [%d,%d,%d,%d,%d,%d]\n",
-                sendAddress[0], sendAddress[1], sendAddress[2],
-                sendAddress[3], sendAddress[4], sendAddress[5]);
+            // 同じ UID なら MAC 変更 + ESP-NOW 再初期化をスキップする。
+            // 以前は SET_SEND_UID のたびに再初期化しており（1 ラップで最大 4 回、
+            // レースクロックで毎秒）、その間 loop() が止まり UART 溢れや
+            // 送信ロストの原因になっていた。
+            if (!macApplied || memcmp(sendAddress, appliedMac, 6) != 0)
+            {
+                drainTxQueue(60);
+                // Change this ESP32's WiFi MAC to impersonate the TX backpack
+                esp_wifi_set_mac(WIFI_IF_STA, sendAddress);
+                reinitEspNow();
+                registerPeer(sendAddress);
+                memcpy(appliedMac, sendAddress, 6);
+                macApplied = true;
+                Serial.printf("[uid] set to [%d,%d,%d,%d,%d,%d]\n",
+                    sendAddress[0], sendAddress[1], sendAddress[2],
+                    sendAddress[3], sendAddress[4], sendAddress[5]);
+            }
         }
         break;
     }
@@ -126,15 +238,9 @@ static void handlePacketFromS3(mspPacket_t *pkt)
         }
         MSP msp;
         uint8_t size = msp.getTotalPacketSize(pkt);
-        uint8_t buf[size];
-        if (msp.convertToByteArray(pkt, buf))
-        {
-            esp_err_t err = esp_now_send(sendAddress, buf, size);
-            if (err != ESP_OK)
-                Serial.printf("[espnow] send error 0x%X for MSP 0x%04X\n", err, pkt->function);
-            else
-                Serial.printf("[espnow] sent MSP 0x%04X (%d B)\n", pkt->function, size);
-        }
+        uint8_t buf[MSP_MAX_FRAME];
+        if (size <= MSP_MAX_FRAME && msp.convertToByteArray(pkt, buf))
+            enqueueTx(sendAddress, buf, size);
         break;
     }
     }
@@ -145,6 +251,10 @@ static void handlePacketFromS3(mspPacket_t *pkt)
 void setup()
 {
     Serial.begin(115200);
+    // RX バッファを拡張（既定 256B）。ESP-NOW 再初期化などで loop() が
+    // 一時的に止まっても、XIAO からの OSD バースト（1 ラップ 300B 超）を
+    // 取りこぼさないようにする。XIAO 側と同じ対策。
+    Serial2.setRxBufferSize(2048);
     Serial2.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
     Serial.println("[boot] ESP32 Wrover-E ESP-NOW bridge");
 
@@ -161,7 +271,7 @@ void setup()
 
 void loop()
 {
-    // UART → ESP-NOW: read MSP bytes from XIAO, parse, send via ESP-NOW
+    // UART → ESP-NOW: read MSP bytes from XIAO, parse, queue for ESP-NOW
     while (Serial2.available())
     {
         uint8_t b = Serial2.read();
@@ -172,4 +282,6 @@ void loop()
             mspFromS3.markPacketReceived();
         }
     }
+
+    pumpTx();
 }

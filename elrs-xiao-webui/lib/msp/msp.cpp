@@ -40,6 +40,15 @@ bool MSP::processReceivedByte(uint8_t c)
             m_packet.function    = header->function;
             m_packet.flags       = header->flags;
             m_offset = 0;
+            // 破損ストリーム（UART でのバイト欠落等）でヘッダがずれると
+            // payloadSize がゴミ値になり、payload[64] を越えて書き込んで
+            // メモリ破壊を起こす。バッファ超過は捨てて再同期する。
+            if (m_packet.payloadSize > MSP_PORT_INBUF_SIZE)
+            {
+                Serial.printf("[msp] oversized payload %u, dropping\n", m_packet.payloadSize);
+                m_inputState = MSP_IDLE;
+                break;
+            }
             m_inputState = (m_packet.payloadSize == 0) ? MSP_CHECKSUM_V2_NATIVE
                                                         : MSP_PAYLOAD_V2_NATIVE;
         }

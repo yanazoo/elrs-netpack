@@ -63,7 +63,8 @@ typedef struct
 
     void addByte(uint8_t b)
     {
-        payload[payloadSize++] = b;
+        if (payloadSize < MSP_PORT_INBUF_SIZE)
+            payload[payloadSize++] = b;
     }
 
     void makeResponse()
