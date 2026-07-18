@@ -1,0 +1,35 @@
+---
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v2.4)"
+        required: true
+      title:
+        description: "Release title"
+        required: true
+      notes_file:
+        description: "Path to markdown file with the release notes"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.2.2
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ inputs.title }}" \
+            --notes-file "${{ inputs.notes_file }}"
