@@ -1,0 +1,53 @@
+---
+name: Publish Release
+
+# リリースブランチ (vX.Y.Z) への push で GitHub Release を自動作成する。
+# タグはブランチ名、タイトルは docs/releases/<tag>.md の先頭見出し、
+# 本文は同ファイル全体。既にリリースが存在する場合は何もしない。
+on:
+  push:
+    branches:
+      - "v[0-9]*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4.2.2
+
+      - name: Determine release parameters
+        id: params
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="docs/releases/${TAG}.md"
+          if [ ! -f "$NOTES" ]; then
+            echo "No release notes at $NOTES — nothing to publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TITLE="$(head -n 1 "$NOTES" | sed 's/^#[[:space:]]*//')"
+          {
+            echo "skip=false"
+            echo "tag=$TAG"
+            echo "title=$TITLE"
+            echo "notes=$NOTES"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        if: steps.params.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.params.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Release ${{ steps.params.outputs.tag }} already exists — skipping"
+            exit 0
+          fi
+          gh release create "${{ steps.params.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.params.outputs.title }}" \
+            --notes-file "${{ steps.params.outputs.notes }}"
