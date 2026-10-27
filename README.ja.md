@@ -96,11 +96,27 @@ ESP-NOW 側（`elrs-espnow-bridge/`）も設定不要です。チャンネルは
 
 **正常起動時のシリアル出力：**
 ```
-[boot] ESP32 Wrover-E ESP-NOW bridge
+[boot] ESP-NOW bridge (UART RX=GPIO26 TX=GPIO27)
 [wifi] channel fixed to 1
 [espnow] (re)initialized
 [boot] ready
 ```
+
+### XIAO ESP32-C3 で代用する場合
+
+ESP32 Wrover-E の代わりに Seeed Studio XIAO ESP32-C3 でも動作します（PlatformIO 環境 **`xiao_esp32c3`**）。
+
+| XIAO ESP32-C3 | 接続先（XIAO ESP32-S3 などのホスト） |
+|---|---|
+| D7 / GPIO20（RX） | ホストの TX（netpack の XIAO なら D0 / GPIO1） |
+| D6 / GPIO21（TX） | ホストの RX（netpack の XIAO なら D1 / GPIO2） |
+| GND | GND |
+
+```
+pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload
+```
+
+起動ログ（USB シリアル）は `[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21)` になります。
 
 ---
 

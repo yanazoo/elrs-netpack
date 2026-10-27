@@ -97,11 +97,22 @@ The ESP-NOW side (`elrs-espnow-bridge/`) also needs no configuration; its channe
 
 **Expected serial output:**
 ```
-[boot] ESP32 Wrover-E ESP-NOW bridge
+[boot] ESP-NOW bridge (UART RX=GPIO26 TX=GPIO27)
 [wifi] channel fixed to 1
 [espnow] (re)initialized
 [boot] ready
 ```
+
+### Using a XIAO ESP32-C3 instead
+
+A Seeed Studio XIAO ESP32-C3 works in place of the ESP32 Wrover-E (PlatformIO env **`xiao_esp32c3`**):
+D7 / GPIO20 (RX) ← host TX, D6 / GPIO21 (TX) → host RX, GND ↔ GND.
+
+```
+pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload
+```
+
+The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21)`.
 
 ---
 
