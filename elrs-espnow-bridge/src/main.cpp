@@ -6,12 +6,21 @@
 #include "msp.h"
 #include "msptypes.h"
 
-// UART to ESP32-S3 XIAO
-// Wire: ESP32 GPIO26(RX) ← XIAO D0(GPIO1/TX)
-//       ESP32 GPIO27(TX) → XIAO D1(GPIO2/RX)
-//       GND              ↔ GND
+// UART to the host (elrs-netpack's XIAO ESP32-S3, or a lap timer).
+// Defaults are the ESP32 Wrover-E wiring; other boards set these in
+// platformio.ini (env:xiao_esp32c3: Serial1 on D7/GPIO20 RX, D6/GPIO21 TX).
+// Wire: bridge RX ← host TX
+//       bridge TX → host RX
+//       GND       ↔ GND
+#ifndef UART_RX_PIN
 #define UART_RX_PIN  26
+#endif
+#ifndef UART_TX_PIN
 #define UART_TX_PIN  27
+#endif
+#ifndef BRIDGE_SERIAL
+#define BRIDGE_SERIAL Serial2
+#endif
 #define UART_BAUD    115200
 
 #ifndef ESPNOW_CHANNEL
@@ -99,7 +108,7 @@ static void onDataRecv(const uint8_t * /*mac*/, const uint8_t *data, int len)
 #endif
 {
     // Forward raw bytes to XIAO; it will parse them as MSP
-    Serial2.write(data, len);
+    BRIDGE_SERIAL.write(data, len);
 }
 
 // ── ESP-NOW init ──────────────────────────────────────────────────────────────
@@ -254,9 +263,9 @@ void setup()
     // RX バッファを拡張（既定 256B）。ESP-NOW 再初期化などで loop() が
     // 一時的に止まっても、XIAO からの OSD バースト（1 ラップ 300B 超）を
     // 取りこぼさないようにする。XIAO 側と同じ対策。
-    Serial2.setRxBufferSize(2048);
-    Serial2.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-    Serial.println("[boot] ESP32 Wrover-E ESP-NOW bridge");
+    BRIDGE_SERIAL.setRxBufferSize(2048);
+    BRIDGE_SERIAL.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+    Serial.printf("[boot] ESP-NOW bridge (UART RX=GPIO%d TX=GPIO%d)\n", UART_RX_PIN, UART_TX_PIN);
 
     // WiFi in STA mode but NOT connected to any AP — ESP-NOW only
     WiFi.mode(WIFI_STA);
@@ -272,9 +281,9 @@ void setup()
 void loop()
 {
     // UART → ESP-NOW: read MSP bytes from XIAO, parse, queue for ESP-NOW
-    while (Serial2.available())
+    while (BRIDGE_SERIAL.available())
     {
-        uint8_t b = Serial2.read();
+        uint8_t b = BRIDGE_SERIAL.read();
         if (mspFromS3.processReceivedByte(b))
         {
             mspPacket_t *pkt = mspFromS3.getReceivedPacket();
