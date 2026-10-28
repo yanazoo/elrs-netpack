@@ -40,7 +40,9 @@ static MSP mspFromEspnow;  // parse bytes arriving from backpack over ESP-NOW
 // レースクロックは毎秒再送されるが、ラップタイムは 1 回きりの送信なので、
 // 一瞬の電波干渉や ESP-NOW 再初期化と重なるとそのラップは二度と表示されない。
 // → 1 パケットずつ送信し、送信コールバックで失敗を検知したらリトライする。
-#define TX_QUEUE_LEN   16
+// A lap timer sends one burst per pilot (UID, every row, display), so the
+// queue holds a few bursts while a UID switch drains it.
+#define TX_QUEUE_LEN   48
 #define TX_MAX_TRIES   3
 #define TX_CB_TIMEOUT_MS 50   // コールバック消失時（reinit と重なった等）の保険
 #define MSP_MAX_FRAME  (MSP_PORT_INBUF_SIZE + 9)  // $X< + header(5) + payload + crc
@@ -59,6 +61,15 @@ static bool          txInFlight = false;
 static uint32_t      txSentMs   = 0;
 static volatile bool txDone     = false;
 static volatile bool txOk       = false;
+
+// Goggles that are off or out of range never ACK: every packet of their
+// burst would burn TX_MAX_TRIES attempts and delay the next pilot's burst
+// (and its UID switch) by hundreds of ms. After one packet to an address
+// fails for good, the rest of that burst is dropped; the next SET_SEND_UID
+// for the address tries again.
+static uint8_t  deadAddr[6]  = {0};
+static bool     deadValid    = false;
+static uint32_t deadDropped  = 0;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -156,11 +167,23 @@ static void pumpTx()
         if (txOk || it.tries >= TX_MAX_TRIES)
         {
             if (!txOk)
+            {
                 Serial.printf("[espnow] send FAILED after %d tries\n", it.tries);
+                memcpy(deadAddr, it.addr, 6);
+                deadValid = true;
+            }
             txHead = (txHead + 1) % TX_QUEUE_LEN;
             txCount--;
         }
         // else: leave item at head — retried below
+    }
+
+    // Drop the rest of a burst to goggles that just stopped answering.
+    while (txCount > 0 && deadValid && memcmp(txQueue[txHead].addr, deadAddr, 6) == 0)
+    {
+        txHead = (txHead + 1) % TX_QUEUE_LEN;
+        txCount--;
+        deadDropped++;
     }
 
     if (txCount == 0) return;
@@ -217,13 +240,25 @@ static void handlePacketFromS3(mspPacket_t *pkt)
 
         if (isNonZero(sendAddress))
         {
+            // A new burst for goggles that failed earlier: give them another go.
+            if (deadValid && memcmp(sendAddress, deadAddr, 6) == 0)
+            {
+                deadValid = false;
+                if (deadDropped)
+                    Serial.printf("[espnow] skipped %lu packets to unreachable goggles\n",
+                                  (unsigned long)deadDropped);
+                deadDropped = 0;
+            }
             // 同じ UID なら MAC 変更 + ESP-NOW 再初期化をスキップする。
             // 以前は SET_SEND_UID のたびに再初期化しており（1 ラップで最大 4 回、
             // レースクロックで毎秒）、その間 loop() が止まり UART 溢れや
             // 送信ロストの原因になっていた。
             if (!macApplied || memcmp(sendAddress, appliedMac, 6) != 0)
             {
-                drainTxQueue(60);
+                // Packets still queued for the previous UID can only go out
+                // with its MAC; unreachable goggles are skipped quickly
+                // (see deadAddr), so this rarely takes long.
+                drainTxQueue(200);
                 // Change this ESP32's WiFi MAC to impersonate the TX backpack
                 esp_wifi_set_mac(WIFI_IF_STA, sendAddress);
                 reinitEspNow();
@@ -263,7 +298,7 @@ void setup()
     // RX バッファを拡張（既定 256B）。ESP-NOW 再初期化などで loop() が
     // 一時的に止まっても、XIAO からの OSD バースト（1 ラップ 300B 超）を
     // 取りこぼさないようにする。XIAO 側と同じ対策。
-    BRIDGE_SERIAL.setRxBufferSize(2048);
+    BRIDGE_SERIAL.setRxBufferSize(4096);
     BRIDGE_SERIAL.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
     Serial.printf("[boot] ESP-NOW bridge (UART RX=GPIO%d TX=GPIO%d)\n", UART_RX_PIN, UART_TX_PIN);
 
