@@ -64,9 +64,15 @@ static volatile bool txOk       = false;
 
 // Goggles that are off or out of range never ACK: every packet of their
 // burst would burn TX_MAX_TRIES attempts and delay the next pilot's burst
-// (and its UID switch) by hundreds of ms. After one packet to an address
-// fails for good, the rest of that burst is dropped; the next SET_SEND_UID
-// for the address tries again.
+// (and its UID switch) by hundreds of ms. After DEAD_AFTER packets in a row
+// to one address fail for good, the rest of that burst is dropped; the next
+// SET_SEND_UID for the address tries again, and one more failure skips again.
+// A single failure is not enough: goggles that are on lose (or don't ACK) a
+// packet now and then, and dropping the rest of their burst - its display
+// command included - lost the whole screen update.
+#define DEAD_AFTER 3
+static uint8_t  failAddr[6]  = {0};
+static uint8_t  failStreak   = 0;
 static uint8_t  deadAddr[6]  = {0};
 static bool     deadValid    = false;
 static uint32_t deadDropped  = 0;
@@ -166,11 +172,23 @@ static void pumpTx()
         TxItem &it = txQueue[txHead];
         if (txOk || it.tries >= TX_MAX_TRIES)
         {
-            if (!txOk)
+            if (txOk)
+            {
+                if (memcmp(failAddr, it.addr, 6) == 0) failStreak = 0;
+            }
+            else
             {
                 Serial.printf("[espnow] send FAILED after %d tries\n", it.tries);
-                memcpy(deadAddr, it.addr, 6);
-                deadValid = true;
+                if (memcmp(failAddr, it.addr, 6) != 0)
+                {
+                    memcpy(failAddr, it.addr, 6);
+                    failStreak = 0;
+                }
+                if (++failStreak >= DEAD_AFTER)
+                {
+                    memcpy(deadAddr, it.addr, 6);
+                    deadValid = true;
+                }
             }
             txHead = (txHead + 1) % TX_QUEUE_LEN;
             txCount--;
@@ -244,6 +262,7 @@ static void handlePacketFromS3(mspPacket_t *pkt)
             if (deadValid && memcmp(sendAddress, deadAddr, 6) == 0)
             {
                 deadValid = false;
+                failStreak = DEAD_AFTER - 1;   // still off: skip after one more failure
                 if (deadDropped)
                     Serial.printf("[espnow] skipped %lu packets to unreachable goggles\n",
                                   (unsigned long)deadDropped);
