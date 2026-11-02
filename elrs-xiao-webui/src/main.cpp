@@ -28,6 +28,11 @@ static Preferences prefs;
 static DNSServer   dnsServer;
 
 static bool     apModeActive        = false;
+// While the setup AP is up with a network already saved, keep trying that
+// network in the background (the timer's AP may simply not be up yet).
+static bool     g_apRetrySta        = false;
+static uint32_t g_apRetryMs         = 0;
+static const uint32_t AP_RETRY_INTERVAL_MS = 15000;
 static uint32_t g_wifiLostMs        = 0;
 static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラグ（イベントタスク → loop）
 
@@ -335,9 +340,23 @@ static String pageVoltage(const String &msg = "")
 static void startCaptivePortal()
 {
     if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
-    WiFi.mode(WIFI_AP);
+    prefs.begin("elrs", true);
+    bool   configured = prefs.getBool("configured", false);
+    String ssid       = prefs.getString("ssid", WIFI_SSID);
+    String pass       = prefs.getString("wifiPass", WIFI_PASSWORD);
+    prefs.end();
+    // With a saved network, keep the station side on (AP+STA) and go on
+    // trying it: the netpack used to stay in the setup AP for good when
+    // the timer's AP was not up within 30 s of boot, or was off for 60 s.
+    g_apRetrySta = configured;
+    WiFi.mode(configured ? WIFI_AP_STA : WIFI_AP);
     esp_wifi_set_max_tx_power(84);
     WiFi.softAP(ap_ssid, ap_password);
+    if (configured) {
+        WiFi.setAutoReconnect(false);
+        WiFi.begin(ssid.c_str(), pass.c_str());
+        g_apRetryMs = millis();
+    }
     apModeActive = true;
     builtinLed.blink(LED_AP_INTERVAL, LED_AP_INTERVAL);
     dnsServer.start(53, "*", WiFi.softAPIP());
@@ -360,6 +379,7 @@ static void wifiConnect()
     // WiFi 切断に伴う TCP 切断はユーザー起因 → beepLong3 を鳴らさず静かにクリア
     g_tcpSessionActive = false;
     g_tcpEverConnected = false;
+    g_apRetrySta = false;   // this call decides afresh
     tcpClient.stop();
     beepCancel();  // この後の接続待ちはブロッキングなので、鳴りっぱなしを防ぐ
 
@@ -405,9 +425,36 @@ static void wifiConnect()
     }
 }
 
+// Setup AP is up: join the saved network as soon as it is there, then
+// drop the AP. Retries pause while someone is on the setup AP (a scan
+// would disturb the setup page).
+static void checkApRetry()
+{
+    if (!g_apRetrySta) return;
+    if (WiFi.status() == WL_CONNECTED) {
+        dnsServer.stop();
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_STA);
+        apModeActive = false;
+        g_apRetrySta = false;
+        g_wifiLostMs = 0;
+        builtinLed.off();
+        Serial.printf("[wifi] joined from the setup AP  IP=%s\n", WiFi.localIP().toString().c_str());
+        startNetServices();
+        beepDouble();
+        return;
+    }
+    uint32_t now = millis();
+    if (now - g_apRetryMs < AP_RETRY_INTERVAL_MS) return;
+    g_apRetryMs = now;
+    if (WiFi.softAPgetStationNum() > 0) return;
+    Serial.println("[wifi] setup AP: retrying the saved network");
+    WiFi.reconnect();
+}
+
 static void checkWifiState()
 {
-    if (apModeActive) return;
+    if (apModeActive) { checkApRetry(); return; }
 
     if (WiFi.status() == WL_CONNECTED) {
         if (g_wifiLostMs != 0) {
@@ -704,10 +751,16 @@ void loop()
         Serial.println("[tcp] session lost");
         beepLong3();
     }
-    // 新規クライアント受け付け
-    if (!tcpClient || !tcpClient.connected()) {
+    // 新規クライアント受け付け。接続中でも新しい接続を優先する:
+    // the timer rebooted or rejoined, and its old connection is dead even
+    // if it still looks open here (keepalive needs ~11 s to notice).
+    {
         WiFiClient c = tcpServer.accept();
         if (c) {
+            if (tcpClient && tcpClient.connected()) {
+                tcpClient.stop();
+                Serial.println("[tcp] replaced by a new connection");
+            }
             setTcpKeepalive(c.fd());
             tcpClient = c;
             g_tcpSessionActive = true;
