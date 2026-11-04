@@ -23,6 +23,16 @@
 #endif
 #define UART_BAUD    115200
 
+// Per-packet / per-UID-switch logging. Off by default: a lap timer switches
+// UID several times a second (one burst per pilot for the race clock), and
+// printing three lines each time held up loop() and made the OSD late.
+// Build with -DBRIDGE_VERBOSE to see them.
+#ifdef BRIDGE_VERBOSE
+#define VLOG(...) Serial.printf(__VA_ARGS__)
+#else
+#define VLOG(...) do {} while (0)
+#endif
+
 #ifndef ESPNOW_CHANNEL
 #define ESPNOW_CHANNEL 1
 #endif
@@ -65,17 +75,57 @@ static volatile bool txOk       = false;
 // Goggles that are off or out of range never ACK: every packet of their
 // burst would burn TX_MAX_TRIES attempts and delay the next pilot's burst
 // (and its UID switch) by hundreds of ms. After DEAD_AFTER packets in a row
-// to one address fail for good, the rest of that burst is dropped; the next
-// SET_SEND_UID for the address tries again, and one more failure skips again.
+// to one address fail for good, its packets are dropped for DEAD_HOLD_MS;
+// then one packet probes again (one more failure: dropped again).
 // A single failure is not enough: goggles that are on lose (or don't ACK) a
 // packet now and then, and dropping the rest of their burst - its display
 // command included - lost the whole screen update.
-#define DEAD_AFTER 3
-static uint8_t  failAddr[6]  = {0};
-static uint8_t  failStreak   = 0;
-static uint8_t  deadAddr[6]  = {0};
-static bool     deadValid    = false;
-static uint32_t deadDropped  = 0;
+// Kept per address: with one shared slot, two pilots with their goggles off
+// pushed each other out of it, and every burst to each burned 3 x 3 tries,
+// a lap timer's race clock (a burst per pilot per second) fell behind and
+// skipped seconds on the goggles that were on.
+#define DEAD_AFTER   3
+#define DEAD_HOLD_MS 2000
+#define PEERS        12
+struct PeerState {
+    bool     used;
+    uint8_t  addr[6];
+    uint8_t  streak;      // final failures in a row
+    uint32_t deadUntil;   // drop its packets until then (0: alive)
+    uint32_t seenMs;      // for replacing the oldest entry
+};
+static PeerState peers[PEERS];
+static uint32_t  deadDropped = 0;
+
+static PeerState &peerState(const uint8_t *addr)
+{
+    PeerState *old = &peers[0];
+    for (auto &p : peers)
+    {
+        if (p.used && memcmp(p.addr, addr, 6) == 0) { p.seenMs = millis(); return p; }
+        if (!p.used || (old->used && (int32_t)(p.seenMs - old->seenMs) < 0)) old = &p;
+    }
+    *old = {};
+    old->used = true;
+    memcpy(old->addr, addr, 6);
+    old->seenMs = millis();
+    return *old;
+}
+
+// Dropping this address's packets right now?
+static bool isDead(const uint8_t *addr)
+{
+    for (auto &p : peers)
+    {
+        if (!p.used || memcmp(p.addr, addr, 6) != 0) continue;
+        if (!p.deadUntil) return false;
+        if ((int32_t)(millis() - p.deadUntil) < 0) return true;
+        p.deadUntil = 0;              // hold over: probe again,
+        p.streak = DEAD_AFTER - 1;    // and one more failure drops it again
+        return false;
+    }
+    return false;
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,7 +143,7 @@ static void registerPeer(const uint8_t *addr)
     p.channel = ESPNOW_CHANNEL;
     p.encrypt  = false;
     if (esp_now_add_peer(&p) == ESP_OK)
-        Serial.printf("[espnow] peer registered [%d,%d,%d,%d,%d,%d]\n",
+        VLOG("[espnow] peer registered [%d,%d,%d,%d,%d,%d]\n",
             addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
     else
         Serial.println("[espnow] failed to add peer");
@@ -136,7 +186,7 @@ static void reinitEspNow()
     if (esp_now_init() != ESP_OK) { Serial.println("[espnow] init failed"); return; }
     esp_now_register_send_cb(onDataSent);
     esp_now_register_recv_cb(onDataRecv);
-    Serial.println("[espnow] (re)initialized");
+    VLOG("[espnow] (re)initialized\n");
 }
 
 // ── ESP-NOW TX queue ──────────────────────────────────────────────────────────
@@ -172,23 +222,16 @@ static void pumpTx()
         TxItem &it = txQueue[txHead];
         if (txOk || it.tries >= TX_MAX_TRIES)
         {
+            PeerState &ps = peerState(it.addr);
             if (txOk)
             {
-                if (memcmp(failAddr, it.addr, 6) == 0) failStreak = 0;
+                ps.streak = 0;
+                ps.deadUntil = 0;
             }
             else
             {
-                Serial.printf("[espnow] send FAILED after %d tries\n", it.tries);
-                if (memcmp(failAddr, it.addr, 6) != 0)
-                {
-                    memcpy(failAddr, it.addr, 6);
-                    failStreak = 0;
-                }
-                if (++failStreak >= DEAD_AFTER)
-                {
-                    memcpy(deadAddr, it.addr, 6);
-                    deadValid = true;
-                }
+                VLOG("[espnow] send FAILED after %d tries\n", it.tries);
+                if (++ps.streak >= DEAD_AFTER) ps.deadUntil = millis() + DEAD_HOLD_MS;
             }
             txHead = (txHead + 1) % TX_QUEUE_LEN;
             txCount--;
@@ -196,8 +239,8 @@ static void pumpTx()
         // else: leave item at head — retried below
     }
 
-    // Drop the rest of a burst to goggles that just stopped answering.
-    while (txCount > 0 && deadValid && memcmp(txQueue[txHead].addr, deadAddr, 6) == 0)
+    // Drop packets to goggles that aren't answering.
+    while (txCount > 0 && isDead(txQueue[txHead].addr))
     {
         txHead = (txHead + 1) % TX_QUEUE_LEN;
         txCount--;
@@ -258,14 +301,9 @@ static void handlePacketFromS3(mspPacket_t *pkt)
 
         if (isNonZero(sendAddress))
         {
-            // A new burst for goggles that failed earlier: give them another go.
-            if (deadValid && memcmp(sendAddress, deadAddr, 6) == 0)
+            if (deadDropped)
             {
-                deadValid = false;
-                failStreak = DEAD_AFTER - 1;   // still off: skip after one more failure
-                if (deadDropped)
-                    Serial.printf("[espnow] skipped %lu packets to unreachable goggles\n",
-                                  (unsigned long)deadDropped);
+                VLOG("[espnow] skipped %lu packets to unreachable goggles\n", (unsigned long)deadDropped);
                 deadDropped = 0;
             }
             // 同じ UID なら MAC 変更 + ESP-NOW 再初期化をスキップする。
@@ -276,7 +314,7 @@ static void handlePacketFromS3(mspPacket_t *pkt)
             {
                 // Packets still queued for the previous UID can only go out
                 // with its MAC; unreachable goggles are skipped quickly
-                // (see deadAddr), so this rarely takes long.
+                // (see PeerState), so this rarely takes long.
                 drainTxQueue(200);
                 // Change this ESP32's WiFi MAC to impersonate the TX backpack
                 esp_wifi_set_mac(WIFI_IF_STA, sendAddress);
@@ -284,7 +322,7 @@ static void handlePacketFromS3(mspPacket_t *pkt)
                 registerPeer(sendAddress);
                 memcpy(appliedMac, sendAddress, 6);
                 macApplied = true;
-                Serial.printf("[uid] set to [%d,%d,%d,%d,%d,%d]\n",
+                VLOG("[uid] set to [%d,%d,%d,%d,%d,%d]\n",
                     sendAddress[0], sendAddress[1], sendAddress[2],
                     sendAddress[3], sendAddress[4], sendAddress[5]);
             }
@@ -303,7 +341,10 @@ static void handlePacketFromS3(mspPacket_t *pkt)
         uint8_t size = msp.getTotalPacketSize(pkt);
         uint8_t buf[MSP_MAX_FRAME];
         if (size <= MSP_MAX_FRAME && msp.convertToByteArray(pkt, buf))
-            enqueueTx(sendAddress, buf, size);
+        {
+            if (isDead(sendAddress)) deadDropped++;   // goggles off: don't queue it
+            else enqueueTx(sendAddress, buf, size);
+        }
         break;
     }
     }
