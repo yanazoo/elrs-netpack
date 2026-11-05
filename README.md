@@ -204,7 +204,10 @@ Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its ow
 - Goggles that are switched off cost nothing (nothing waits for them), so up to 8 pilots with their goggles off don't delay the others.
 - Two goggles bound to the same phrase both show the OSD (no ACK collision).
 - One lost packet is covered by the next copy; longer dropouts by the host's own timed repeats (RotorHazard's vrxc_elrs, or the lap timer).
+- Copies of one packet are at least 3 ms apart: ELRS 2.4 GHz transmitters (one per pilot, right next to the goggles) hop to a new frequency every few ms and about a third of their hops land in ESP-NOW's channel 1, so a later copy meets a different hop.
 - Per-packet logging: build with `-DBRIDGE_VERBOSE`.
+
+> **WiFi channel:** ESP-NOW runs on **channel 1** (the ELRS VRx backpack's fixed channel). Put the router the netpack XIAO joins on **channel 6–11** (not 1–4), so its WiFi doesn't share the air with the OSD.
 
 ---
 

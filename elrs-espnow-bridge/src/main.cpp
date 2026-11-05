@@ -62,6 +62,12 @@ static MSP mspFromEspnow;  // parse bytes arriving from backpack over ESP-NOW
 #ifndef SEND_REPEATS
 #define SEND_REPEATS   3
 #endif
+// Copies of one packet at least this far apart. ELRS 2.4 GHz TXs (one per
+// pilot, right next to the goggles) hop to a new frequency every packet,
+// every few ms, and about a third of the hops fall in ESP-NOW's channel 1:
+// a copy a few ms later meets a different hop. A full burst takes longer
+// than this anyway; a short one (a race-clock tick: row + display) waits.
+#define COPY_GAP_US    3000
 #define BURST_MAX      32    // packets in one burst (a full screen is ~20)
 #define BURST_IDLE_MS  20    // a host that doesn't end its bursts: send after this quiet
 #define SEND_CB_TIMEOUT_MS 10
@@ -151,7 +157,12 @@ static void flushBurst()
 {
     if (burstLen == 0) return;
     for (int r = 0; r < SEND_REPEATS; r++)
+    {
+        uint32_t start = micros();
         for (uint8_t i = 0; i < burstLen; i++) sendOne(burst[i]);
+        uint32_t took = micros() - start;
+        if (r + 1 < SEND_REPEATS && took < COPY_GAP_US) delayMicroseconds(COPY_GAP_US - took);
+    }
     VLOG("[espnow] burst of %u sent x%d\n", burstLen, SEND_REPEATS);
     burstLen = 0;
 }
