@@ -45,87 +45,38 @@ static bool    macApplied     = false;
 static MSP mspFromS3;      // parse bytes arriving from XIAO over UART
 static MSP mspFromEspnow;  // parse bytes arriving from backpack over ESP-NOW
 
-// ── ESP-NOW TX queue with retry ──────────────────────────────────────────────
-// esp_now_send は fire-and-forget で、送信失敗（ACK 無し）は捨てられていた。
-// レースクロックは毎秒再送されるが、ラップタイムは 1 回きりの送信なので、
-// 一瞬の電波干渉や ESP-NOW 再初期化と重なるとそのラップは二度と表示されない。
-// → 1 パケットずつ送信し、送信コールバックで失敗を検知したらリトライする。
-// A lap timer sends one burst per pilot (UID, every row, display), so the
-// queue holds a few bursts while a UID switch drains it.
-#define TX_QUEUE_LEN   48
-#define TX_MAX_TRIES   3
-#define TX_CB_TIMEOUT_MS 50   // コールバック消失時（reinit と重なった等）の保険
+// ── Sending: connectionless, every burst three times ────────────────────────
+// Goggles' backpacks (ELRS VRx) accept an OSD packet when it comes from
+// their bind-phrase UID. So this ESP32 takes the pilot's UID as its MAC and
+// sends to the broadcast address: no ACK, no waiting, no retries (like UDP).
+// Before, packets were sent to the UID itself and every one waited for the
+// goggles' ACK and was retried: goggles that were off (up to 8 of them at a
+// field) held up everyone else's OSD, and two goggles on one bind phrase
+// ACKed at once, collided and looked like a failure.
+// Instead each burst (what the host sends for one pilot: SET_SEND_UID, the
+// OSD packets, display) goes out SEND_REPEATS times in a row, a few ms
+// apart: one lost packet (10 % loss -> 0.1 % with three copies) is covered
+// by the next copy; the host's own timed repeats cover longer dropouts.
+// Every packet is idempotent (write a row, display, clear), so goggles that
+// get two or three copies show the same.
+#ifndef SEND_REPEATS
+#define SEND_REPEATS   3
+#endif
+#define BURST_MAX      32    // packets in one burst (a full screen is ~20)
+#define BURST_IDLE_MS  20    // a host that doesn't end its bursts: send after this quiet
+#define SEND_CB_TIMEOUT_MS 10
 #define MSP_MAX_FRAME  (MSP_PORT_INBUF_SIZE + 9)  // $X< + header(5) + payload + crc
 
-struct TxItem {
-    uint8_t addr[6];
+static const uint8_t broadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+struct BurstPkt {
     uint8_t len;
-    uint8_t tries;
     uint8_t data[MSP_MAX_FRAME];
 };
-
-static TxItem        txQueue[TX_QUEUE_LEN];
-static uint8_t       txHead     = 0;   // next item to send
-static uint8_t       txCount    = 0;
-static bool          txInFlight = false;
-static uint32_t      txSentMs   = 0;
-static volatile bool txDone     = false;
-static volatile bool txOk       = false;
-
-// Goggles that are off or out of range never ACK: every packet of their
-// burst would burn TX_MAX_TRIES attempts and delay the next pilot's burst
-// (and its UID switch) by hundreds of ms. After DEAD_AFTER packets in a row
-// to one address fail for good, its packets are dropped for DEAD_HOLD_MS;
-// then one packet probes again (one more failure: dropped again).
-// A single failure is not enough: goggles that are on lose (or don't ACK) a
-// packet now and then, and dropping the rest of their burst - its display
-// command included - lost the whole screen update.
-// Kept per address: with one shared slot, two pilots with their goggles off
-// pushed each other out of it, and every burst to each burned 3 x 3 tries,
-// a lap timer's race clock (a burst per pilot per second) fell behind and
-// skipped seconds on the goggles that were on.
-#define DEAD_AFTER   3
-#define DEAD_HOLD_MS 2000
-#define PEERS        12
-struct PeerState {
-    bool     used;
-    uint8_t  addr[6];
-    uint8_t  streak;      // final failures in a row
-    uint32_t deadUntil;   // drop its packets until then (0: alive)
-    uint32_t seenMs;      // for replacing the oldest entry
-};
-static PeerState peers[PEERS];
-static uint32_t  deadDropped = 0;
-
-static PeerState &peerState(const uint8_t *addr)
-{
-    PeerState *old = &peers[0];
-    for (auto &p : peers)
-    {
-        if (p.used && memcmp(p.addr, addr, 6) == 0) { p.seenMs = millis(); return p; }
-        if (!p.used || (old->used && (int32_t)(p.seenMs - old->seenMs) < 0)) old = &p;
-    }
-    *old = {};
-    old->used = true;
-    memcpy(old->addr, addr, 6);
-    old->seenMs = millis();
-    return *old;
-}
-
-// Dropping this address's packets right now?
-static bool isDead(const uint8_t *addr)
-{
-    for (auto &p : peers)
-    {
-        if (!p.used || memcmp(p.addr, addr, 6) != 0) continue;
-        if (!p.deadUntil) return false;
-        if ((int32_t)(millis() - p.deadUntil) < 0) return true;
-        p.deadUntil = 0;              // hold over: probe again,
-        p.streak = DEAD_AFTER - 1;    // and one more failure drops it again
-        return false;
-    }
-    return false;
-}
+static BurstPkt      burst[BURST_MAX];
+static uint8_t       burstLen    = 0;
+static uint32_t      burstLastMs = 0;
+static volatile bool txDone      = false;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -135,18 +86,13 @@ static bool isNonZero(const uint8_t *addr)
     return false;
 }
 
-static void registerPeer(const uint8_t *addr)
+static void registerBroadcastPeer()
 {
-    esp_now_del_peer(addr);
     esp_now_peer_info_t p = {};
-    memcpy(p.peer_addr, addr, 6);
+    memcpy(p.peer_addr, broadcastAddress, 6);
     p.channel = ESPNOW_CHANNEL;
-    p.encrypt  = false;
-    if (esp_now_add_peer(&p) == ESP_OK)
-        VLOG("[espnow] peer registered [%d,%d,%d,%d,%d,%d]\n",
-            addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
-    else
-        Serial.println("[espnow] failed to add peer");
+    p.encrypt = false;
+    if (esp_now_add_peer(&p) != ESP_OK) Serial.println("[espnow] failed to add broadcast peer");
 }
 
 static void reinitEspNow();
@@ -162,9 +108,8 @@ static void onDataSent(const wifi_tx_info_t * /*info*/, esp_now_send_status_t st
 static void onDataSent(const uint8_t * /*mac*/, esp_now_send_status_t status)
 #endif
 {
-    // Only one packet is ever in flight (see pumpTx), so this result
-    // unambiguously belongs to txQueue[txHead].
-    txOk   = (status == ESP_NOW_SEND_SUCCESS);
+    // Broadcast: no ACK, so this only says the packet has left the radio.
+    (void)status;
     txDone = true;
 }
 
@@ -186,97 +131,29 @@ static void reinitEspNow()
     if (esp_now_init() != ESP_OK) { Serial.println("[espnow] init failed"); return; }
     esp_now_register_send_cb(onDataSent);
     esp_now_register_recv_cb(onDataRecv);
+    registerBroadcastPeer();
     VLOG("[espnow] (re)initialized\n");
 }
 
-// ── ESP-NOW TX queue ──────────────────────────────────────────────────────────
+// ── Bursts ───────────────────────────────────────────────────────────────────
 
-static bool enqueueTx(const uint8_t *addr, const uint8_t *data, uint8_t len)
+static void sendOne(const BurstPkt &p)
 {
-    if (len > MSP_MAX_FRAME) return false;
-    if (txCount >= TX_QUEUE_LEN)
-    {
-        Serial.println("[espnow] tx queue full, dropping packet");
-        return false;
-    }
-    TxItem &it = txQueue[(txHead + txCount) % TX_QUEUE_LEN];
-    memcpy(it.addr, addr, 6);
-    memcpy(it.data, data, len);
-    it.len   = len;
-    it.tries = 0;
-    txCount++;
-    return true;
-}
-
-// loop() 毎回呼ぶ。1 パケットずつ送信し、失敗したら TX_MAX_TRIES まで再送。
-static void pumpTx()
-{
-    if (txInFlight)
-    {
-        if (!txDone)
-        {
-            if (millis() - txSentMs < TX_CB_TIMEOUT_MS) return;
-            txOk = false;  // callback lost (e.g. reinit while in flight)
-        }
-        txInFlight = false;
-        TxItem &it = txQueue[txHead];
-        if (txOk || it.tries >= TX_MAX_TRIES)
-        {
-            PeerState &ps = peerState(it.addr);
-            if (txOk)
-            {
-                ps.streak = 0;
-                ps.deadUntil = 0;
-            }
-            else
-            {
-                VLOG("[espnow] send FAILED after %d tries\n", it.tries);
-                if (++ps.streak >= DEAD_AFTER) ps.deadUntil = millis() + DEAD_HOLD_MS;
-            }
-            txHead = (txHead + 1) % TX_QUEUE_LEN;
-            txCount--;
-        }
-        // else: leave item at head — retried below
-    }
-
-    // Drop packets to goggles that aren't answering.
-    while (txCount > 0 && isDead(txQueue[txHead].addr))
-    {
-        txHead = (txHead + 1) % TX_QUEUE_LEN;
-        txCount--;
-        deadDropped++;
-    }
-
-    if (txCount == 0) return;
-
-    TxItem &it = txQueue[txHead];
-    it.tries++;
-    txDone   = false;
-    txOk     = false;
-    txSentMs = millis();
-    if (esp_now_send(it.addr, it.data, it.len) == ESP_OK)
-    {
-        txInFlight = true;
-    }
-    else if (it.tries >= TX_MAX_TRIES)
-    {
-        // Immediate API error (e.g. peer not registered) — give up on this one
-        Serial.println("[espnow] send API error, dropping packet");
-        txHead = (txHead + 1) % TX_QUEUE_LEN;
-        txCount--;
-    }
-}
-
-// UID 切り替え前にキューを掃く。切り替えで peer/MAC が変わると
-// 残っていた前パイロット宛のパケットが送信不能になるため。
-static void drainTxQueue(uint32_t timeoutMs)
-{
+    txDone = false;
+    if (esp_now_send(broadcastAddress, p.data, p.len) != ESP_OK) return;   // queue full: next copy
     uint32_t start = millis();
-    while (txCount > 0 && millis() - start < timeoutMs)
-    {
-        pumpTx();
-        delay(1);
-    }
+    while (!txDone && millis() - start < SEND_CB_TIMEOUT_MS) delayMicroseconds(100);
+}
+
+// Send the collected burst SEND_REPEATS times (under the MAC it was collected
+// for) and start a new one.
+static void flushBurst()
+{
+    if (burstLen == 0) return;
+    for (int r = 0; r < SEND_REPEATS; r++)
+        for (uint8_t i = 0; i < burstLen; i++) sendOne(burst[i]);
+    VLOG("[espnow] burst of %u sent x%d\n", burstLen, SEND_REPEATS);
+    burstLen = 0;
 }
 
 // ── MSP packet handler (packets received from XIAO via UART) ─────────────────
@@ -299,27 +176,19 @@ static void handlePacketFromS3(mspPacket_t *pkt)
             memcpy(sendAddress, bindAddress, 6);
         }
 
+        // The previous pilot's burst is complete: send it with its MAC.
+        flushBurst();
         if (isNonZero(sendAddress))
         {
-            if (deadDropped)
-            {
-                VLOG("[espnow] skipped %lu packets to unreachable goggles\n", (unsigned long)deadDropped);
-                deadDropped = 0;
-            }
-            // 同じ UID なら MAC 変更 + ESP-NOW 再初期化をスキップする。
-            // 以前は SET_SEND_UID のたびに再初期化しており（1 ラップで最大 4 回、
-            // レースクロックで毎秒）、その間 loop() が止まり UART 溢れや
-            // 送信ロストの原因になっていた。
+            // 同じ UID なら MAC 変更 + ESP-NOW 再初期化をスキップする（毎秒の
+            // レースクロックで UID が変わらないときに loop() を止めないため）。
             if (!macApplied || memcmp(sendAddress, appliedMac, 6) != 0)
             {
-                // Packets still queued for the previous UID can only go out
-                // with its MAC; unreachable goggles are skipped quickly
-                // (see PeerState), so this rarely takes long.
-                drainTxQueue(200);
-                // Change this ESP32's WiFi MAC to impersonate the TX backpack
+                // Take the pilot's UID as this ESP32's MAC: the goggles only
+                // accept packets from it (and the race director's switch is
+                // sent to it, so the bridge hears it while on the RD's UID).
                 esp_wifi_set_mac(WIFI_IF_STA, sendAddress);
                 reinitEspNow();
-                registerPeer(sendAddress);
                 memcpy(appliedMac, sendAddress, 6);
                 macApplied = true;
                 VLOG("[uid] set to [%d,%d,%d,%d,%d,%d]\n",
@@ -339,12 +208,13 @@ static void handlePacketFromS3(mspPacket_t *pkt)
         }
         MSP msp;
         uint8_t size = msp.getTotalPacketSize(pkt);
-        uint8_t buf[MSP_MAX_FRAME];
-        if (size <= MSP_MAX_FRAME && msp.convertToByteArray(pkt, buf))
-        {
-            if (isDead(sendAddress)) deadDropped++;   // goggles off: don't queue it
-            else enqueueTx(sendAddress, buf, size);
-        }
+        if (size > MSP_MAX_FRAME) break;
+        if (burstLen >= BURST_MAX) flushBurst();   // very long burst: send what we have
+        BurstPkt &bp = burst[burstLen];
+        if (!msp.convertToByteArray(pkt, bp.data)) break;
+        bp.len = size;
+        burstLen++;
+        burstLastMs = millis();
         break;
     }
     }
@@ -375,7 +245,7 @@ void setup()
 
 void loop()
 {
-    // UART → ESP-NOW: read MSP bytes from XIAO, parse, queue for ESP-NOW
+    // UART → ESP-NOW: read MSP bytes from the host, parse, collect bursts
     while (BRIDGE_SERIAL.available())
     {
         uint8_t b = BRIDGE_SERIAL.read();
@@ -387,5 +257,7 @@ void loop()
         }
     }
 
-    pumpTx();
+    // A host that never sends the closing SET_SEND_UID: the burst ends when
+    // the UART goes quiet.
+    if (burstLen && millis() - burstLastMs >= BURST_IDLE_MS) flushBurst();
 }

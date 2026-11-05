@@ -197,6 +197,15 @@ If flashing fails, enter bootloader mode:
 | Max TX power | 21 dBm (both WiFi and ESP-NOW sides) |
 | Backpack version | Reports firmware version 10.1 to RotorHazard |
 
+### How the ESP-NOW bridge sends (elrs-espnow-bridge)
+
+Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its own MAC (goggle backpacks only accept OSD packets from that UID) and sends to the ESP-NOW **broadcast** address, without waiting for an ACK and without retries. Each burst for one pilot (all its OSD packets up to the next `SET_SEND_UID`, or 20 ms of quiet) is sent **3 times in a row** (`SEND_REPEATS`).
+
+- Goggles that are switched off cost nothing (nothing waits for them), so up to 8 pilots with their goggles off don't delay the others.
+- Two goggles bound to the same phrase both show the OSD (no ACK collision).
+- One lost packet is covered by the next copy; longer dropouts by the host's own timed repeats (RotorHazard's vrxc_elrs, or the lap timer).
+- Per-packet logging: build with `-DBRIDGE_VERBOSE`.
+
 ---
 
 ### Web UI Pages
