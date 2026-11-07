@@ -160,7 +160,7 @@ static void onDataRecv(const uint8_t *mac, const uint8_t *data, int len)
     if (listenSet && !sameUid(mac, listenUid)) return;   // not the race director
     if (len <= 0 || len > (int)sizeof(rxQueue[0].data)) return;
     uint8_t next = (rxTail + 1) % RX_QUEUE_LEN;
-    if (next == rxHead) { rxDropped++; return; }          // host link backed up
+    if (next == rxHead) { rxDropped = rxDropped + 1; return; }          // host link backed up
     rxQueue[rxTail].len = (uint8_t)len;
     memcpy(rxQueue[rxTail].data, data, len);
     rxTail = next;
