@@ -75,6 +75,36 @@ static MSP mspFromEspnow;  // parse bytes arriving from backpack over ESP-NOW
 
 static const uint8_t broadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
+// ── Listen filter (set by the host) ──────────────────────────────────────────
+// Everything this ESP32 hears on channel 1 used to go to the host: the race
+// director's switch, but also every other bridge's broadcast OSD and other
+// backpacks' traffic. A lap timer sends MSP_BRIDGE_SET_LISTEN with the race
+// director's UID: from then on only frames *from* that UID are passed on
+// (the RD's TX backpack sends from its UID), so a pilot's own DVR switch,
+// heard while the bridge is on that pilot's UID, can't start the race, and
+// nothing else floods the UART / TCP link. The bridge answers so the host
+// knows the filter is on. Size 0 clears it (forward everything, as before,
+// for hosts that never send it, e.g. RotorHazard's vrxc_elrs).
+#define MSP_BRIDGE_SET_LISTEN 0x0F01
+static bool    listenSet = false;
+static uint8_t listenUid[6];
+
+// Frames heard over ESP-NOW wait here for loop() to pass them to the host:
+// the receive callback runs in the WiFi task and must not block on the UART.
+#define RX_QUEUE_LEN 8
+struct RxItem {
+    uint8_t len;
+    uint8_t data[250];
+};
+static RxItem            rxQueue[RX_QUEUE_LEN];
+static volatile uint8_t  rxHead = 0, rxTail = 0;   // written by loop / the callback
+static volatile uint32_t rxDropped = 0;
+
+static bool sameUid(const uint8_t *a, const uint8_t *b)
+{
+    return (a[0] & ~0x01) == (b[0] & ~0x01) && memcmp(a + 1, b + 1, 5) == 0;
+}
+
 struct BurstPkt {
     uint8_t len;
     uint8_t data[MSP_MAX_FRAME];
@@ -120,13 +150,30 @@ static void onDataSent(const uint8_t * /*mac*/, esp_now_send_status_t status)
 }
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-static void onDataRecv(const esp_now_recv_info_t * /*info*/, const uint8_t *data, int len)
-#else
-static void onDataRecv(const uint8_t * /*mac*/, const uint8_t *data, int len)
-#endif
+static void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 {
-    // Forward raw bytes to XIAO; it will parse them as MSP
-    BRIDGE_SERIAL.write(data, len);
+    const uint8_t *mac = info->src_addr;
+#else
+static void onDataRecv(const uint8_t *mac, const uint8_t *data, int len)
+{
+#endif
+    if (listenSet && !sameUid(mac, listenUid)) return;   // not the race director
+    if (len <= 0 || len > (int)sizeof(rxQueue[0].data)) return;
+    uint8_t next = (rxTail + 1) % RX_QUEUE_LEN;
+    if (next == rxHead) { rxDropped++; return; }          // host link backed up
+    rxQueue[rxTail].len = (uint8_t)len;
+    memcpy(rxQueue[rxTail].data, data, len);
+    rxTail = next;
+}
+
+// loop(): pass what was heard to the host.
+static void forwardRx()
+{
+    while (rxHead != rxTail)
+    {
+        BRIDGE_SERIAL.write(rxQueue[rxHead].data, rxQueue[rxHead].len);
+        rxHead = (rxHead + 1) % RX_QUEUE_LEN;
+    }
 }
 
 // ── ESP-NOW init ──────────────────────────────────────────────────────────────
@@ -209,6 +256,23 @@ static void handlePacketFromS3(mspPacket_t *pkt)
         }
         break;
     }
+    case MSP_BRIDGE_SET_LISTEN:
+    {
+        flushBurst();
+        listenSet = pkt->payloadSize >= 6;
+        for (int i = 0; i < 6 && listenSet; i++) listenUid[i] = pkt->readByte();
+        // Answer, so the host knows the filter is on (payload: 1 = on).
+        mspPacket_t resp;
+        resp.reset();
+        resp.makeResponse();
+        resp.function = MSP_BRIDGE_SET_LISTEN;
+        resp.addByte(listenSet ? 1 : 0);
+        MSP msp;
+        uint8_t buf[MSP_MAX_FRAME];
+        uint8_t size = msp.getTotalPacketSize(&resp);
+        if (size <= MSP_MAX_FRAME && msp.convertToByteArray(&resp, buf)) BRIDGE_SERIAL.write(buf, size);
+        break;
+    }
     default:
     {
         // Forward all other MSP packets via ESP-NOW to the backpack
@@ -267,6 +331,8 @@ void loop()
             mspFromS3.markPacketReceived();
         }
     }
+
+    forwardRx();
 
     // A host that never sends the closing SET_SEND_UID: the burst ends when
     // the UART goes quiet.
