@@ -86,6 +86,9 @@ static const uint8_t broadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 // knows the filter is on. Size 0 clears it (forward everything, as before,
 // for hosts that never send it, e.g. RotorHazard's vrxc_elrs).
 #define MSP_BRIDGE_SET_LISTEN 0x0F01
+// Restart the bridge (the lap timer's "restart everything" button). Empty
+// payload; the bridge answers (payload [1]) and restarts.
+#define MSP_BRIDGE_RESTART 0x0F02
 static bool    listenSet = false;
 static uint8_t listenUid[6];
 
@@ -271,6 +274,23 @@ static void handlePacketFromS3(mspPacket_t *pkt)
         uint8_t buf[MSP_MAX_FRAME];
         uint8_t size = msp.getTotalPacketSize(&resp);
         if (size <= MSP_MAX_FRAME && msp.convertToByteArray(&resp, buf)) BRIDGE_SERIAL.write(buf, size);
+        break;
+    }
+    case MSP_BRIDGE_RESTART:
+    {
+        flushBurst();
+        mspPacket_t resp;
+        resp.reset();
+        resp.makeResponse();
+        resp.function = MSP_BRIDGE_RESTART;
+        resp.addByte(1);
+        MSP msp;
+        uint8_t buf[MSP_MAX_FRAME];
+        uint8_t size = msp.getTotalPacketSize(&resp);
+        if (size <= MSP_MAX_FRAME && msp.convertToByteArray(&resp, buf)) BRIDGE_SERIAL.write(buf, size);
+        BRIDGE_SERIAL.flush();
+        delay(50);
+        ESP.restart();
         break;
     }
     default:

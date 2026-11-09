@@ -206,6 +206,7 @@ Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its ow
 - One lost packet is covered by the next copy; longer dropouts by the host's own timed repeats (RotorHazard's vrxc_elrs, or the lap timer).
 - Copies of one packet are at least 3 ms apart: ELRS 2.4 GHz transmitters (one per pilot, right next to the goggles) hop to a new frequency every few ms and about a third of their hops land in ESP-NOW's channel 1, so a later copy meets a different hop.
 - **Listen filter** (custom MSP `0x0F01`, payload = a 6-byte UID, empty to clear): the host (the FPV C5 Lap Timer) gives the race director's UID, and the bridge then passes on only frames *from* that UID (the RD's TX switch). Other bridges' broadcast OSD and pilots' own DVR switches are no longer forwarded. The bridge answers with `0x0F01` payload `1`. Hosts that never send it (RotorHazard / vrxc_elrs) get everything, as before.
+- **Restart** (custom MSP `0x0F02`, empty payload): the bridge answers with `0x0F02` payload `1` and restarts (the lap timer's restart button).
 - Frames heard over ESP-NOW are queued and written to the UART from `loop()`, never from the WiFi task.
 - Per-packet logging: build with `-DBRIDGE_VERBOSE`.
 
