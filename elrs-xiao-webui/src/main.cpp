@@ -274,6 +274,25 @@ static String htmlHead(const char *title)
     return h;
 }
 
+// Text inside an HTML attribute or page. An SSID with an apostrophe
+// ("John's iPhone") used to end the value='...' of the SSID field early:
+// the field showed "John", and saving the form again stored that.
+static String htmlEsc(const String &in)
+{
+    String out;
+    out.reserve(in.length() + 8);
+    for (size_t i = 0; i < in.length(); i++) {
+        char c = in[i];
+        if      (c == '&')  out += "&amp;";
+        else if (c == '<')  out += "&lt;";
+        else if (c == '>')  out += "&gt;";
+        else if (c == '"')  out += "&quot;";
+        else if (c == '\'') out += "&#39;";
+        else                out += c;
+    }
+    return out;
+}
+
 static String nvsSsid()
 {
     prefs.begin("elrs", true);
@@ -289,7 +308,7 @@ static String pageWifi(const String &msg = "")
     if (msg.length()) { p += "<div class='msg'>"; p += msg; p += "</div>"; }
     p += "<form method='POST' action='/wifi'>";
     p += "<label>SSID<input type='text' name='ssid' value='";
-    p += nvsSsid(); p += "'></label>";
+    p += htmlEsc(nvsSsid()); p += "'></label>";
     p += "<label>"; p += L("Password", "パスワード");
     p += "<input type='password' name='pass' placeholder='";
     p += L("(leave blank to keep)", "(変更しない場合は空欄)");
@@ -763,6 +782,10 @@ void loop()
             }
             setTcpKeepalive(c.fd());
             tcpClient = c;
+            // A frame the old connection left half read must not swallow
+            // the start of the new one (its first frame, the version
+            // request, went missing and the host's connect check failed).
+            mspFromTcp.markPacketReceived();
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
             Serial.println("[tcp] session started");
