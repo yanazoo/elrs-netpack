@@ -107,6 +107,17 @@ static uint8_t listenUid[6];
 #define LINK_REPORT_EVERY_MS 1000    // per UID, or at once when it links / unlinks
 #define LINK_FORGET_MS       5000    // nothing heard from a UID for this long
 #define LINK_MAX             16
+// While watching, also: the TX's VTX settings (Lua VTX Administrator), which
+// the TX sends when it links and the backpack passes on to the goggles at the
+// same UID (MSP_SET_VTX_CONFIG). Reported at once: MSP_BRIDGE_VTX_REPORT,
+// payload uid[6] and the VTX config's first two bytes (band/channel index,
+// or a frequency in MHz, little-endian).
+#define MSP_BRIDGE_VTX_REPORT  0x0F05
+#define MSP_SET_VTX_CONFIG     89
+#define VTX_QUEUE              8
+struct VtxSeen { uint8_t uid[6]; uint8_t b0, b1; };
+static VtxSeen  vtxQ[VTX_QUEUE];
+static volatile uint8_t vtxHead = 0, vtxTail = 0;   // written under linkMux
 struct LinkSeen {
     uint8_t  uid[6];
     uint8_t  lq;
@@ -259,10 +270,25 @@ static void onSniff(void *buf, wifi_promiscuous_pkt_type_t type)
     if (bodyLen < 9 || 39 + bodyLen > len) return;
     if (b[0] != '$' || b[1] != 'X' || b[2] != '<') return;
     uint16_t fn = b[4] | (b[5] << 8), sz = b[6] | (b[7] << 8);
-    if (fn != MSP_ELRS_BACKPACK_CRSF_TLM || 8 + sz + 1 > bodyLen || sz < 6) return;
+    if (fn != MSP_ELRS_BACKPACK_CRSF_TLM && fn != MSP_SET_VTX_CONFIG) return;
+    if (8 + sz + 1 > bodyLen || sz < (fn == MSP_SET_VTX_CONFIG ? 2 : 6)) return;
     uint8_t crc = 0;
     for (int i = 3; i < 8 + sz; i++) crc = crc8DvbS2(crc, b[i]);
     if (crc != b[8 + sz]) return;
+    if (fn == MSP_SET_VTX_CONFIG)
+    {
+        portENTER_CRITICAL(&linkMux);
+        uint8_t next = (uint8_t)((vtxHead + 1) % VTX_QUEUE);
+        if (next != vtxTail)
+        {
+            memcpy(vtxQ[vtxHead].uid, f + 4, 6);
+            vtxQ[vtxHead].b0 = b[8];
+            vtxQ[vtxHead].b1 = b[9];
+            vtxHead = next;
+        }
+        portEXIT_CRITICAL(&linkMux);
+        return;
+    }
     const uint8_t *crsf = b + 8;   // [address, length, type, payload...]
     if (crsf[2] != CRSF_FRAMETYPE_LINK_STATISTICS) return;
     noteLink(f + 4, crsf[5]);      // addr1 = the pilot's UID; payload[2] = uplink LQ
@@ -305,6 +331,23 @@ static void reportLinks()
     if (!linkWatch) return;
     uint32_t now = millis();
     if (now - linkWatchAt > LINK_WATCH_HOLD_MS) { setLinkWatch(false); return; }
+    for (;;)
+    {
+        VtxSeen v;
+        portENTER_CRITICAL(&linkMux);
+        bool any = vtxTail != vtxHead;
+        if (any) v = vtxQ[vtxTail], vtxTail = (uint8_t)((vtxTail + 1) % VTX_QUEUE);
+        portEXIT_CRITICAL(&linkMux);
+        if (!any) break;
+        mspPacket_t r;
+        r.reset();
+        r.makeCommand();
+        r.function = MSP_BRIDGE_VTX_REPORT;
+        for (int k = 0; k < 6; k++) r.addByte(v.uid[k]);
+        r.addByte(v.b0);
+        r.addByte(v.b1);
+        sendToHost(r);
+    }
     for (int i = 0; i < LINK_MAX; i++)
     {
         LinkSeen e;
