@@ -89,6 +89,37 @@ static const uint8_t broadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static bool    listenSet = false;
 static uint8_t listenUid[6];
 
+// ── Link watch (asked for by the host) ───────────────────────────────────────
+// A pilot's TX backpack with Backpack > Telemetry = ESPNOW (ELRS 3.4+) sends
+// the TX module's CRSF telemetry, link statistics among it, to its bind
+// phrase UID over ESP-NOW, a few times a second while the radio is on. The
+// uplink LQ says whether the radio is linked to the aircraft. The bridge
+// listens to channel 1 in promiscuous mode (frames to every UID, not just its
+// own MAC) and reports per UID: MSP_BRIDGE_LINK_REPORT, payload uid[6],
+// uplink LQ, age (1/10 s). Only while a host keeps asking for it
+// (MSP_BRIDGE_LINK_WATCH [1], every few seconds): a host that never asks
+// (RotorHazard's vrxc_elrs) sees nothing new.
+#define MSP_BRIDGE_LINK_WATCH  0x0F03
+#define MSP_BRIDGE_LINK_REPORT 0x0F04
+#define MSP_ELRS_BACKPACK_CRSF_TLM 0x0011
+#define CRSF_FRAMETYPE_LINK_STATISTICS 0x14
+#define LINK_WATCH_HOLD_MS   20000   // off again without a refresh from the host
+#define LINK_REPORT_EVERY_MS 1000    // per UID, or at once when it links / unlinks
+#define LINK_FORGET_MS       5000    // nothing heard from a UID for this long
+#define LINK_MAX             16
+struct LinkSeen {
+    uint8_t  uid[6];
+    uint8_t  lq;
+    bool     used;
+    uint32_t at;       // millis() when last heard
+    uint32_t sentAt;   // last report to the host
+    uint8_t  sentLq;
+};
+static LinkSeen      links[LINK_MAX];
+static portMUX_TYPE  linkMux = portMUX_INITIALIZER_UNLOCKED;
+static bool          linkWatch = false;
+static uint32_t      linkWatchAt = 0;
+
 // Frames heard over ESP-NOW wait here for loop() to pass them to the host:
 // the receive callback runs in the WiFi task and must not block on the UART.
 #define RX_QUEUE_LEN 8
@@ -176,6 +207,128 @@ static void forwardRx()
     }
 }
 
+// ── Link watch: sniffing ─────────────────────────────────────────────────────
+
+static uint8_t crc8DvbS2(uint8_t crc, uint8_t a)
+{
+    crc ^= a;
+    for (int i = 0; i < 8; i++) crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0xD5) : (uint8_t)(crc << 1);
+    return crc;
+}
+
+static void noteLink(const uint8_t *uid, uint8_t lq)
+{
+    uint32_t now = millis();
+    portENTER_CRITICAL(&linkMux);
+    int slot = -1, freeSlot = -1, oldest = 0;
+    for (int i = 0; i < LINK_MAX; i++)
+    {
+        if (!links[i].used) { if (freeSlot < 0) freeSlot = i; continue; }
+        if (sameUid(links[i].uid, uid)) { slot = i; break; }
+        if ((int32_t)(links[i].at - links[oldest].at) < 0) oldest = i;
+    }
+    if (slot < 0)
+    {
+        slot = freeSlot >= 0 ? freeSlot : oldest;
+        links[slot] = LinkSeen{};
+        memcpy(links[slot].uid, uid, 6);
+        links[slot].sentLq = 0xFF;   // new: report it at once
+        links[slot].used = true;
+    }
+    links[slot].lq = lq;
+    links[slot].at = now;
+    portEXIT_CRITICAL(&linkMux);
+}
+
+// Promiscuous receive (WiFi task): an ESP-NOW frame carrying a TX backpack's
+// CRSF link statistics. ESP-NOW is an 802.11 action frame: header (24),
+// category 127 + OUI 18:FE:34 + 4 random bytes, then the vendor element
+// (DD, length, 18:FE:34, type 4, version) and the body, here an MSP v2 frame
+// MSP_ELRS_BACKPACK_CRSF_TLM whose payload is the CRSF frame.
+static void onSniff(void *buf, wifi_promiscuous_pkt_type_t type)
+{
+    if (type != WIFI_PKT_MGMT) return;
+    const wifi_promiscuous_pkt_t *p = (const wifi_promiscuous_pkt_t *)buf;
+    const uint8_t *f = p->payload;
+    int len = (int)p->rx_ctrl.sig_len;
+    if (len < 48 || f[0] != 0xD0) return;   // action frame
+    if (f[24] != 0x7F || f[25] != 0x18 || f[26] != 0xFE || f[27] != 0x34) return;
+    if (f[32] != 0xDD || f[34] != 0x18 || f[35] != 0xFE || f[36] != 0x34 || f[37] != 0x04) return;
+    int bodyLen = (int)f[33] - 5;
+    const uint8_t *b = f + 39;
+    if (bodyLen < 9 || 39 + bodyLen > len) return;
+    if (b[0] != '$' || b[1] != 'X' || b[2] != '<') return;
+    uint16_t fn = b[4] | (b[5] << 8), sz = b[6] | (b[7] << 8);
+    if (fn != MSP_ELRS_BACKPACK_CRSF_TLM || 8 + sz + 1 > bodyLen || sz < 6) return;
+    uint8_t crc = 0;
+    for (int i = 3; i < 8 + sz; i++) crc = crc8DvbS2(crc, b[i]);
+    if (crc != b[8 + sz]) return;
+    const uint8_t *crsf = b + 8;   // [address, length, type, payload...]
+    if (crsf[2] != CRSF_FRAMETYPE_LINK_STATISTICS) return;
+    noteLink(f + 4, crsf[5]);      // addr1 = the pilot's UID; payload[2] = uplink LQ
+}
+
+static void setLinkWatch(bool on)
+{
+    if (on == linkWatch) return;
+    linkWatch = on;
+    if (on)
+    {
+        wifi_promiscuous_filter_t filt = {};
+        filt.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
+        esp_wifi_set_promiscuous_filter(&filt);
+        esp_wifi_set_promiscuous_rx_cb(onSniff);
+        esp_wifi_set_promiscuous(true);
+    }
+    else
+    {
+        esp_wifi_set_promiscuous(false);
+        portENTER_CRITICAL(&linkMux);
+        memset(links, 0, sizeof links);
+        portEXIT_CRITICAL(&linkMux);
+    }
+    Serial.printf("[link] watch %s\n", on ? "on" : "off");
+}
+
+static void sendToHost(mspPacket_t &pkt)
+{
+    MSP msp;
+    uint8_t buf[MSP_MAX_FRAME];
+    uint8_t size = msp.getTotalPacketSize(&pkt);
+    if (size <= MSP_MAX_FRAME && msp.convertToByteArray(&pkt, buf)) BRIDGE_SERIAL.write(buf, size);
+}
+
+// loop(): report each UID heard, at once when it links or unlinks, else
+// once a second; drop UIDs not heard for LINK_FORGET_MS.
+static void reportLinks()
+{
+    if (!linkWatch) return;
+    uint32_t now = millis();
+    if (now - linkWatchAt > LINK_WATCH_HOLD_MS) { setLinkWatch(false); return; }
+    for (int i = 0; i < LINK_MAX; i++)
+    {
+        LinkSeen e;
+        portENTER_CRITICAL(&linkMux);
+        e = links[i];
+        bool due = e.used && (e.sentLq == 0xFF || (e.lq > 0) != (e.sentLq > 0) ||
+                              now - e.sentAt >= LINK_REPORT_EVERY_MS);
+        bool gone = e.used && now - e.at > LINK_FORGET_MS;
+        if (gone) links[i].used = false;
+        else if (due) links[i].sentAt = now, links[i].sentLq = e.lq;
+        portEXIT_CRITICAL(&linkMux);
+        if (gone || !due) continue;
+        mspPacket_t r;
+        r.reset();
+        r.makeCommand();
+        r.function = MSP_BRIDGE_LINK_REPORT;
+        for (int k = 0; k < 6; k++) r.addByte(e.uid[k]);
+        r.addByte(e.lq);
+        uint32_t ageDs = (now - e.at) / 100;
+        r.addByte(ageDs > 255 ? 255 : (uint8_t)ageDs);
+        sendToHost(r);
+    }
+}
+
 // ── ESP-NOW init ──────────────────────────────────────────────────────────────
 
 static void reinitEspNow()
@@ -185,6 +338,7 @@ static void reinitEspNow()
     esp_now_register_send_cb(onDataSent);
     esp_now_register_recv_cb(onDataRecv);
     registerBroadcastPeer();
+    if (linkWatch) esp_wifi_set_promiscuous(true);   // a MAC change must not end the link watch
     VLOG("[espnow] (re)initialized\n");
 }
 
@@ -273,6 +427,19 @@ static void handlePacketFromS3(mspPacket_t *pkt)
         if (size <= MSP_MAX_FRAME && msp.convertToByteArray(&resp, buf)) BRIDGE_SERIAL.write(buf, size);
         break;
     }
+    case MSP_BRIDGE_LINK_WATCH:
+    {
+        bool on = pkt->payloadSize >= 1 && pkt->readByte() == 1;
+        linkWatchAt = millis();
+        setLinkWatch(on);
+        mspPacket_t resp;
+        resp.reset();
+        resp.makeResponse();
+        resp.function = MSP_BRIDGE_LINK_WATCH;
+        resp.addByte(on ? 1 : 0);
+        sendToHost(resp);
+        break;
+    }
     default:
     {
         // Forward all other MSP packets via ESP-NOW to the backpack
@@ -333,6 +500,7 @@ void loop()
     }
 
     forwardRx();
+    reportLinks();
 
     // A host that never sends the closing SET_SEND_UID: the burst ends when
     // the UART goes quiet.
