@@ -101,12 +101,11 @@ static uint8_t listenUid[6];
 // (RotorHazard's vrxc_elrs) sees nothing new.
 #define MSP_BRIDGE_LINK_WATCH  0x0F03
 #define MSP_BRIDGE_LINK_REPORT 0x0F04
-#define MSP_ELRS_BACKPACK_CRSF_TLM 0x0011
 #define CRSF_FRAMETYPE_LINK_STATISTICS 0x14
 #define LINK_WATCH_HOLD_MS   20000   // off again without a refresh from the host
 #define LINK_REPORT_EVERY_MS 1000    // per UID, or at once when it links / unlinks
 #define LINK_FORGET_MS       5000    // nothing heard from a UID for this long
-#define LINK_MAX             16
+#define LINK_SLOTS             16
 // While watching, also: the TX's VTX settings (Lua VTX Administrator), which
 // the TX sends when it links and the backpack passes on to the goggles at the
 // same UID (MSP_SET_VTX_CONFIG). Reported at once: MSP_BRIDGE_VTX_REPORT,
@@ -126,7 +125,7 @@ struct LinkSeen {
     uint32_t sentAt;   // last report to the host
     uint8_t  sentLq;
 };
-static LinkSeen      links[LINK_MAX];
+static LinkSeen      links[LINK_SLOTS];
 static portMUX_TYPE  linkMux = portMUX_INITIALIZER_UNLOCKED;
 static bool          linkWatch = false;
 static uint32_t      linkWatchAt = 0;
@@ -232,7 +231,7 @@ static void noteLink(const uint8_t *uid, uint8_t lq)
     uint32_t now = millis();
     portENTER_CRITICAL(&linkMux);
     int slot = -1, freeSlot = -1, oldest = 0;
-    for (int i = 0; i < LINK_MAX; i++)
+    for (int i = 0; i < LINK_SLOTS; i++)
     {
         if (!links[i].used) { if (freeSlot < 0) freeSlot = i; continue; }
         if (sameUid(links[i].uid, uid)) { slot = i; break; }
@@ -336,7 +335,11 @@ static void reportLinks()
         VtxSeen v;
         portENTER_CRITICAL(&linkMux);
         bool any = vtxTail != vtxHead;
-        if (any) v = vtxQ[vtxTail], vtxTail = (uint8_t)((vtxTail + 1) % VTX_QUEUE);
+        if (any)
+        {
+            v = vtxQ[vtxTail];
+            vtxTail = (uint8_t)((vtxTail + 1) % VTX_QUEUE);
+        }
         portEXIT_CRITICAL(&linkMux);
         if (!any) break;
         mspPacket_t r;
@@ -348,7 +351,7 @@ static void reportLinks()
         r.addByte(v.b1);
         sendToHost(r);
     }
-    for (int i = 0; i < LINK_MAX; i++)
+    for (int i = 0; i < LINK_SLOTS; i++)
     {
         LinkSeen e;
         portENTER_CRITICAL(&linkMux);
