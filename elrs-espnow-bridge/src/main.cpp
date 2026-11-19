@@ -264,6 +264,7 @@ static void onSniff(void *buf, wifi_promiscuous_pkt_type_t type)
     if (len < 48 || f[0] != 0xD0) return;   // action frame
     if (f[24] != 0x7F || f[25] != 0x18 || f[26] != 0xFE || f[27] != 0x34) return;
     if (f[32] != 0xDD || f[34] != 0x18 || f[35] != 0xFE || f[36] != 0x34 || f[37] != 0x04) return;
+    if (f[4] & 0x01) return;               // to a group / broadcast: not a pilot's UID
     int bodyLen = (int)f[33] - 5;
     const uint8_t *b = f + 39;
     if (bodyLen < 9 || 39 + bodyLen > len) return;
