@@ -190,6 +190,35 @@ static void onDataSent(const uint8_t * /*mac*/, esp_now_send_status_t status)
     txDone = true;
 }
 
+// The race director's frames reach the host two ways (see onSniff): through
+// ESP-NOW while the bridge is on the RD's UID, and sniffed. The same frame
+// heard again within RX_DEDUP_MS (the other way, or the sender's retries of
+// an unanswered frame) is passed on once. A switch flipped back and forth
+// is a different frame each time, so it still goes through.
+#define RX_DEDUP_MS 500
+static uint8_t  lastRx[16];
+static uint8_t  lastRxLen = 0;
+static uint32_t lastRxAt = 0;
+
+// WiFi task (receive and sniff callbacks): queue a frame for the host.
+static void queueRx(const uint8_t *data, int len)
+{
+    if (len <= 0 || len > (int)sizeof(rxQueue[0].data)) return;
+    uint32_t now = millis();
+    if (len <= (int)sizeof lastRx)
+    {
+        if (len == lastRxLen && now - lastRxAt < RX_DEDUP_MS && memcmp(data, lastRx, len) == 0) return;
+        memcpy(lastRx, data, len);
+        lastRxLen = (uint8_t)len;
+        lastRxAt = now;
+    }
+    uint8_t next = (rxTail + 1) % RX_QUEUE_LEN;
+    if (next == rxHead) { rxDropped = rxDropped + 1; return; }          // host link backed up
+    rxQueue[rxTail].len = (uint8_t)len;
+    memcpy(rxQueue[rxTail].data, data, len);
+    rxTail = next;
+}
+
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 static void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 {
@@ -199,12 +228,7 @@ static void onDataRecv(const uint8_t *mac, const uint8_t *data, int len)
 {
 #endif
     if (listenSet && !sameUid(mac, listenUid)) return;   // not the race director
-    if (len <= 0 || len > (int)sizeof(rxQueue[0].data)) return;
-    uint8_t next = (rxTail + 1) % RX_QUEUE_LEN;
-    if (next == rxHead) { rxDropped = rxDropped + 1; return; }          // host link backed up
-    rxQueue[rxTail].len = (uint8_t)len;
-    memcpy(rxQueue[rxTail].data, data, len);
-    rxTail = next;
+    queueRx(data, len);
 }
 
 // loop(): pass what was heard to the host.
@@ -270,11 +294,22 @@ static void onSniff(void *buf, wifi_promiscuous_pkt_type_t type)
     if (bodyLen < 9 || 39 + bodyLen > len) return;
     if (b[0] != '$' || b[1] != 'X' || b[2] != '<') return;
     uint16_t fn = b[4] | (b[5] << 8), sz = b[6] | (b[7] << 8);
-    if (fn != MSP_ELRS_BACKPACK_CRSF_TLM && fn != MSP_SET_VTX_CONFIG) return;
-    if (8 + sz + 1 > bodyLen || sz < (fn == MSP_SET_VTX_CONFIG ? 2 : 6)) return;
+    bool rdSwitch = fn == MSP_ELRS_BACKPACK_SET_RECORDING_STATE;
+    if (rdSwitch ? !listenSet : (!linkWatch || (fn != MSP_ELRS_BACKPACK_CRSF_TLM && fn != MSP_SET_VTX_CONFIG))) return;
+    if (8 + sz + 1 > bodyLen || sz < (rdSwitch ? 1 : fn == MSP_SET_VTX_CONFIG ? 2 : 6)) return;
     uint8_t crc = 0;
     for (int i = 3; i < 8 + sz; i++) crc = crc8DvbS2(crc, b[i]);
     if (crc != b[8 + sz]) return;
+    if (rdSwitch)
+    {
+        // The race director's switch, sent once per flip to the RD's UID.
+        // ESP-NOW hands the bridge only frames to the MAC it has right now,
+        // and during the OSD bursts that is a pilot's UID: the flip was
+        // missed. Sniffed, it is heard whatever the bridge's MAC is (and
+        // again in each retry the TX backpack makes while nobody answers).
+        if (sameUid(f + 4, listenUid) || sameUid(f + 10, listenUid)) queueRx(b, 9 + sz);
+        return;
+    }
     if (fn == MSP_SET_VTX_CONFIG)
     {
         portENTER_CRITICAL(&linkMux);
@@ -294,10 +329,14 @@ static void onSniff(void *buf, wifi_promiscuous_pkt_type_t type)
     noteLink(f + 4, crsf[5]);      // addr1 = the pilot's UID; payload[2] = uplink LQ
 }
 
-static void setLinkWatch(bool on)
+// Sniffing runs while the host watches links or listens for the race
+// director (MSP_BRIDGE_SET_LISTEN).
+static bool sniffing = false;
+static void updateSniff()
 {
-    if (on == linkWatch) return;
-    linkWatch = on;
+    bool on = linkWatch || listenSet;
+    if (on == sniffing) return;
+    sniffing = on;
     if (on)
     {
         wifi_promiscuous_filter_t filt = {};
@@ -309,10 +348,20 @@ static void setLinkWatch(bool on)
     else
     {
         esp_wifi_set_promiscuous(false);
+    }
+}
+
+static void setLinkWatch(bool on)
+{
+    if (on == linkWatch) return;
+    linkWatch = on;
+    if (!on)
+    {
         portENTER_CRITICAL(&linkMux);
         memset(links, 0, sizeof links);
         portEXIT_CRITICAL(&linkMux);
     }
+    updateSniff();
     Serial.printf("[link] watch %s\n", on ? "on" : "off");
 }
 
@@ -385,7 +434,7 @@ static void reinitEspNow()
     esp_now_register_send_cb(onDataSent);
     esp_now_register_recv_cb(onDataRecv);
     registerBroadcastPeer();
-    if (linkWatch) esp_wifi_set_promiscuous(true);   // a MAC change must not end the link watch
+    if (sniffing) esp_wifi_set_promiscuous(true);   // a MAC change must not end the sniffing
     VLOG("[espnow] (re)initialized\n");
 }
 
@@ -462,6 +511,7 @@ static void handlePacketFromS3(mspPacket_t *pkt)
         flushBurst();
         listenSet = pkt->payloadSize >= 6;
         for (int i = 0; i < 6 && listenSet; i++) listenUid[i] = pkt->readByte();
+        updateSniff();
         // Answer, so the host knows the filter is on (payload: 1 = on).
         mspPacket_t resp;
         resp.reset();
