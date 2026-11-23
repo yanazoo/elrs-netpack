@@ -12,7 +12,9 @@
 
 ## 概要
 
-ラップタイマー（**FPV C5 Lap Timer** や **RotorHazard**）が送る MSP パケット（ゴーグルの OSD・レースの合図）を、WiFi（TCP）で受け取り、**ELRS VRx バックパック**（FPV ゴーグル）へ ESP-NOW で届けるシステムです。2 台のボードで作ります。
+**[FPV C5 Lap Timer](https://github.com/yanazoo/FPV-C5-Lap-Timer)** が送るゴーグルの OSD・レースの合図（MSP パケット）を、WiFi（TCP）で受け取り、**ELRS VRx バックパック**（FPV ゴーグル）へ ESP-NOW で届けるシステムです。2 台のボードで作ります。
+
+> **RotorHazard でも使えます**（プラグイン [vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)。[下記](#rotorhazard-でも使えます)）。
 
 | ボード | ファームウェア | 役割 |
 |---|---|---|
@@ -20,7 +22,7 @@
 | **ELRSバックパック-ブリッジ**（**XIAO ESP32-C3**。XIAO ESP32-C5・ESP32 Wrover-E でも可） | `elrs-espnow-bridge/` | ESP-NOW（2.4 GHz、ch 1）でゴーグル・送信機のバックパックと送受信 |
 
 ```
- FPV C5 Lap Timer / RotorHazard
+ FPV C5 Lap Timer（RotorHazard でも可）
         │  WiFi・TCP 8080
         ▼
 ┌──────────────────────────┐
@@ -40,7 +42,7 @@
 
 **なぜ 2 台必要か？** ESP32 の 2.4 GHz 無線は 1 つだけです。WiFi（ルーターや FPV C5 Lap Timer の WiFi）と ESP-NOW（ch 1 固定）を 1 台で同時に使うと、チャンネルが合わずパケットが落ちます。役割を 2 台に分けて UART でつなぐことで、この問題を解決しています。
 
-> FPV C5 Lap Timer では、ブリッジを **本体に UART で直結**して使うこともできます（netpack の XIAO は不要。FPV C5 Lap Timer の [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)）。netpack は、ブリッジを FPV C5 Lap Timer の近くに置けない場合や、RotorHazard で使う場合の構成です。
+> FPV C5 Lap Timer では、ブリッジを **本体に UART で直結**して使うこともできます（netpack の XIAO は不要。FPV C5 Lap Timer の [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)）。netpack は、ブリッジを FPV C5 Lap Timer の近くに置けない場合や、netpack の WiFi に FPV C5 Lap Timer とスマホをまとめてつなぎたい場合（ホストモード）の構成です。
 
 ---
 
@@ -233,21 +235,25 @@ netpack の XIAO の USB-C に Android スマホをつなぎ、スマホの「US
 
 ---
 
-## FPV C5 Lap Timer・RotorHazard との接続
+## FPV C5 Lap Timer との接続
 
 **FPV C5 Lap Timer**（設定タブ → ELRS OSD）
 - 接続方式：**「WiFi（elrs-netpack XIAO, TCP）」**
 - netpack アドレス：`auto`（ホストモードの FPV C5 Lap Timer は自分の WiFi につながった機器から、クライアントモードの FPV C5 Lap Timer は `elrs-netpack.local` で探します）。netpack の IP を固定した場合は、その IP を直接入れることもできます。
 - 設定画面に「ELRS netpack 接続中」と出れば OK です。
 
-**RotorHazard**（Raspberry Pi）
-- プラグイン **[yanazoo/vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)** をインストールし、次のように設定します。
+### RotorHazard でも使えます
+
+RotorHazard（Raspberry Pi）からも、同じように TCP 8080 でつないでゴーグルに OSD を出せます。プラグイン **[yanazoo/vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)** をインストールし、次のように設定します。
 ```
 Settings → ELRS バックパック 一般設定
   バックパック接続タイプ → SOCKET
   ELRS Netpack アドレス  → elrs-netpack.local（または netpack の IP アドレス）
   ポート                 → 8080
 ```
+
+- netpack の設定ページの「MSP：接続中」に Raspberry Pi のアドレスが出れば OK です（「FPV C5 Lap Timer」のリンクは、FPV C5 Lap Timer のときだけ出ます）。
+- 同時に送れるのは 1 台です（新しく接続した方に切り替わります）。FPV C5 Lap Timer と RotorHazard を同時に netpack へつながないでください。
 
 ---
 

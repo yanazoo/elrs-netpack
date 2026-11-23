@@ -12,7 +12,9 @@
 
 ## Overview
 
-A lap timer (**FPV C5 Lap Timer** or **RotorHazard**) sends MSP packets (the goggles' OSD, race signals). This system takes them over WiFi (TCP) and delivers them to the **ELRS VRx backpacks** (FPV goggles) over ESP-NOW. It is built from two boards.
+**[FPV C5 Lap Timer](https://github.com/yanazoo/FPV-C5-Lap-Timer)** sends the goggles' OSD and race signals as MSP packets. This system takes them over WiFi (TCP) and delivers them to the **ELRS VRx backpacks** (FPV goggles) over ESP-NOW. It is built from two boards.
+
+> **RotorHazard works too** (plugin [vrxc_elrs](https://github.com/yanazoo/vrxc_elrs); [below](#rotorhazard-works-too)).
 
 | Board | Firmware | Role |
 |---|---|---|
@@ -20,7 +22,7 @@ A lap timer (**FPV C5 Lap Timer** or **RotorHazard**) sends MSP packets (the gog
 | **ELRS Backpack bridge** (**XIAO ESP32-C3**; a XIAO ESP32-C5 or ESP32 Wrover-E also does) | `elrs-espnow-bridge/` | ESP-NOW (2.4 GHz, ch 1) to and from the goggles' and radios' backpacks |
 
 ```
- FPV C5 Lap Timer / RotorHazard
+ FPV C5 Lap Timer (or RotorHazard)
         │  WiFi, TCP 8080
         ▼
 ┌──────────────────────────┐
@@ -40,7 +42,7 @@ A lap timer (**FPV C5 Lap Timer** or **RotorHazard**) sends MSP packets (the gog
 
 **Why two boards?** An ESP32 has one 2.4 GHz radio. WiFi (a router or FPV C5 Lap Timer's WiFi) and ESP-NOW (fixed on ch 1) on one board don't share a channel and packets get lost. Splitting the roles over two boards joined by UART solves it.
 
-> FPV C5 Lap Timer can also take the bridge **wired straight to FPV C5 Lap Timer over UART** (no netpack XIAO; see FPV C5 Lap Timer's [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)). The netpack is for a bridge that can't sit next to FPV C5 Lap Timer, and for RotorHazard.
+> FPV C5 Lap Timer can also take the bridge **wired straight to FPV C5 Lap Timer over UART** (no netpack XIAO; see FPV C5 Lap Timer's [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)). The netpack is for a bridge that can't sit next to FPV C5 Lap Timer, or for FPV C5 Lap Timer and phones all on the netpack's WiFi (host mode).
 
 ---
 
@@ -233,14 +235,16 @@ With an Android phone on the XIAO's USB-C and its "USB tethering" on, the device
 
 ---
 
-## Connecting FPV C5 Lap Timer and RotorHazard
+## Connecting FPV C5 Lap Timer
 
 **FPV C5 Lap Timer** (Settings → ELRS OSD)
 - Connection: **"WiFi（elrs-netpack XIAO, TCP）"**
 - netpack address: `auto` (FPV C5 Lap Timer in host mode looks among the devices on its WiFi; in client mode it looks up `elrs-netpack.local`). With a fixed netpack address, that IP can go here directly.
 - "ELRS netpack 接続中" (connected) on the settings screen means it works.
 
-**RotorHazard** (Raspberry Pi)
+### RotorHazard works too
+
+RotorHazard (Raspberry Pi) connects the same way, over TCP 8080, for the goggles' OSD.
 - Install the plugin **[yanazoo/vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)** and set:
 ```
 Settings → ELRS Backpack General
@@ -248,6 +252,9 @@ Settings → ELRS Backpack General
   ELRS Netpack address     → elrs-netpack.local (or the netpack's IP address)
   Port                     → 8080
 ```
+
+- "MSP: connected" on the netpack's settings page with the Raspberry Pi's address means it works (the "FPV C5 Lap Timer" link only shows for FPV C5 Lap Timer).
+- One sender at a time (a new connection replaces the old one): don't connect FPV C5 Lap Timer and RotorHazard to the netpack together.
 
 ---
 

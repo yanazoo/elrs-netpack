@@ -24,6 +24,11 @@
 
 static WiFiServer     tcpServer(TCP_PORT);
 static WiFiClient     tcpClient;
+static volatile uint32_t g_mspPeer = 0;   // the MSP (TCP) peer, 0 = none
+static volatile uint32_t g_lapIp   = 0;   // the last mDNS answer
+// The MSP peer is FPV C5 Lap Timer: it asked the bridge to watch the
+// radios' links (0x0F03), which RotorHazard's plugin never does.
+static volatile bool     g_peerIsLap = false;
 static MSP            mspFromTcp;
 static MSP            mspFromUart;
 static HardwareSerial uart(1);
@@ -253,6 +258,7 @@ static void handlePacketFromTcp(mspPacket_t *pkt)
     }
     if (pkt->function == MSP_ELRS_BACKPACK_SET_BUZZER)
         beepShort();
+    if (pkt->function == 0x0F03) g_peerIsLap = true;   // FPV C5 Lap Timer's link watch
     sendMspToUart(pkt);
 }
 
@@ -420,10 +426,12 @@ static void staBegin(int i)
 // FPV C5 Lap Timer's address, kept by loop() for the pages and the DNS
 // relay (they never wait): the MSP peer, else the last answer of an mDNS
 // lookup for fpv-c5-lt.local made in the background every 30 s.
-static volatile uint32_t g_mspPeer = 0;   // the MSP (TCP) peer, 0 = none
-static volatile uint32_t g_lapIp   = 0;   // the last mDNS answer
 
-static IPAddress knownLapTimer() { return IPAddress(g_mspPeer ? g_mspPeer : g_lapIp); }
+static IPAddress knownLapTimer()
+{
+    if (g_mspPeer && g_peerIsLap) return IPAddress(g_mspPeer);
+    return IPAddress(g_lapIp);   // RotorHazard sending MSP is not FPV C5 Lap Timer
+}
 
 static void lookUpLapTimer()
 {
@@ -1755,6 +1763,7 @@ void loop()
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
             LOG.println("[tcp] session started");
+            g_peerIsLap = (uint32_t)c.remoteIP() == g_lapIp;   // until it shows itself
             learnLapMac();
             beepShort();
         }
