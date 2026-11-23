@@ -194,14 +194,18 @@ static inline void beepShort()  { beepStart(1, 80, 0);    }  // 短音 1 回
 static inline void beepDouble() { beepStart(2, 80, 120);  }  // 短音 2 回
 static inline void beepLong3()  { beepStart(5, 500, 200); }  // TCP 切断警告: 長音 5 回
 
-// 接続受け入れ時に TCP keepalive を設定（デッドコネクション検出: 5s idle → 2s間隔 × 3回）
+// 接続受け入れ時に TCP keepalive を設定（デッドコネクション検出: 10s idle → 3s間隔 × 4回）
 static void setTcpKeepalive(int fd)
 {
     int yes = 1;
     setsockopt(fd, SOL_SOCKET,  SO_KEEPALIVE,  &yes, sizeof(yes));
-    int v = 5; setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &v, sizeof(v));
-        v = 2; setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &v, sizeof(v));
-        v = 3; setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &v, sizeof(v));
+    // 10 s idle, 4 probes 3 s apart (~22 s). Shorter dropped a good session
+    // on a weak link when a few probes went missing; FPV C5 Lap Timer
+    // leaving our WiFi ends it at once anyway (g_apLeftEvent), and one that
+    // restarts connects again (the new connection replaces the old).
+    int v = 10; setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &v, sizeof(v));
+        v = 3;  setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &v, sizeof(v));
+        v = 4;  setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &v, sizeof(v));
 }
 
 // WiFi 切断ブザーの 5 秒タイムアウト管理
@@ -1018,7 +1022,10 @@ static void startHost()
     WiFi.mode(WIFI_AP);
     esp_wifi_set_max_tx_power(84);
     const char *pass = g_hostPass.length() >= 8 ? g_hostPass.c_str() : HOST_PASS_DEFAULT;
-    int maxSta = g_hostPhones + 1;   // FPV C5 Lap Timer + phones / PCs
+    // FPV C5 Lap Timer + phones / PCs, and one place to spare: the timer
+    // rejoining after a drop is never turned away while a phone past the
+    // limit is still being sent off (limitDevices keeps the count).
+    int maxSta = g_hostPhones + 2 < HOST_MAX_STA ? g_hostPhones + 2 : HOST_MAX_STA;
     // As FPV C5 Lap Timer's access point: the address and DHCP first, then
     // the WiFi (set the other way round, DHCP restarted under a running AP).
     IPAddress ip(192, 168, 4, 1);
@@ -1050,7 +1057,7 @@ static void startHost()
 }
 
 // Host mode: at most g_hostPhones devices besides FPV C5 Lap Timer, so its
-// place is always free (the access point takes g_hostPhones + 1). A device
+// place is always free (the access point takes g_hostPhones + 2). A device
 // past the limit is sent off and kept out for 30 s (it would join again at
 // once). FPV C5 Lap Timer is known by the MAC its TCP came from.
 static const uint32_t HOLD_OFF_MS = 30000;
@@ -1058,7 +1065,10 @@ static struct { uint8_t mac[6]; uint32_t since; bool used; } g_held[4];
 
 static void learnLapMac()
 {
-    if (!g_hostActive || !tcpClient || !tcpClient.connected()) return;
+    // Only from FPV C5 Lap Timer's own session: RotorHazard (or anything
+    // else on TCP 8080) learnt as the timer left the real one counted as a
+    // phone, and sent off when the phones were at the limit.
+    if (!g_hostActive || !g_peerIsLap || !tcpClient || !tcpClient.connected()) return;
     uint32_t ip = (uint32_t)tcpClient.remoteIP();
     wifi_sta_list_t sl = {};
     if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK || !sl.num) return;
@@ -1099,6 +1109,7 @@ static void limitDevices()
     if (!g_hostActive || (!joined && now - last < 3000)) return;
     g_apJoinEvent = false;
     last = now;
+    learnLapMac();   // the session showed itself as FPV C5 Lap Timer since (0x0F03)
     wifi_sta_list_t sl = {};
     if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK) return;
     // Held devices that joined again: out again while the hold lasts.
@@ -1109,12 +1120,12 @@ static void limitDevices()
     for (auto &h : g_held)
         if (h.used && now - h.since >= HOLD_OFF_MS) h.used = false;
     // Over the limit: the newest devices go (the list is in join order).
-    // Until FPV C5 Lap Timer is known (its first TCP here), the access
-    // point's own limit (phones + 1) does it: it might be the newest.
-    if (!g_lapMacKnown) return;
+    // Until FPV C5 Lap Timer is known (its first TCP here), phones + 1 in
+    // all (it might be the newest).
+    int allowed = g_lapMacKnown ? g_hostPhones : g_hostPhones + 1;
     int others = 0;
     for (int i = 0; i < sl.num; i++)
-        if (!isLapTimer(sl.sta[i].mac) && ++others > g_hostPhones) {
+        if (!isLapTimer(sl.sta[i].mac) && ++others > allowed) {
             int slot = 0;
             for (int k = 0; k < 4; k++) {
                 if (!g_held[k].used) { slot = k; break; }
