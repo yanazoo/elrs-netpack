@@ -1,4 +1,4 @@
-# ELRS Netpack — TCP → WiFi → ESP-NOW ブリッジ
+# ELRS Netpack — TCP → WiFi → ELRSバックパック-ブリッジ
 
 [English](README.md) | 日本語
 
@@ -171,7 +171,7 @@ pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload
 
 | 方法 | 対象 | 使い方 |
 |---|---|---|
-| **Web 書き込みページ**（最新版） | netpack XIAO・ESP-NOW ブリッジ（XIAO C3 / XIAO C5 / Wrover-E を選択） | PC の Chrome / Edge で [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) を開き、機器の「書き込む」 |
+| **Web 書き込みページ**（最新版） | netpack XIAO・ELRSバックパック-ブリッジ（XIAO C3 / XIAO C5 / Wrover-E を選択） | PC の Chrome / Edge で [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) を開き、機器の「書き込む」 |
 | **Web 書き込みページ**（ファイルを指定） | 同上 | 同じページの「ファイルを指定して書き込む」に .bin（試験版・前の版）またはリリースの zip をドロップ。アドレスはファイル名から自動で入ります（変更可）。firmware.bin には「最初のアプリから起動」（otadata）が自動で付きます |
 | **ネットから更新**（ボタン） | netpack XIAO | netpack の設定ページ →「更新」→「🔍 最新版を確認」→「⬇️ 〜に更新」。インターネットが必要です（クライアントモードのルーター、またはホストモードの USB テザリング） |
 | **ファイルから** | netpack XIAO | netpack の設定ページ →「更新」→ firmware.bin（`elrs-netpack-xiao_esp32s3-firmware.bin` かリリース zip の中）を選んで「ファイルで更新」 |
@@ -234,7 +234,7 @@ upload_port = COM3   ; デバイスマネージャーで確認した番号に変
 | 最大送信出力 | WiFi・ESP-NOW 両側とも 21 dBm |
 | バックパックバージョン | RotorHazard にバージョン 10.1 を報告 |
 
-### ESP-NOW ブリッジの送信方式（elrs-espnow-bridge）
+### ELRSバックパック-ブリッジの送信方式（elrs-espnow-bridge）
 
 UDP のような**コネクションレス送信**です。ブリッジはパイロットのバインドフレーズの UID を自分の MAC にし（ゴーグルのバックパックは、その UID から来た OSD パケットだけを表示します）、ESP-NOW の**ブロードキャスト**で送ります。受信確認（ACK）は待たず、再送もしません。
 
@@ -254,11 +254,11 @@ UDP のような**コネクションレス送信**です。ブリッジはパイ
 
 ### ホストモードと USB テザリング（v2.2.0）
 
-netpack を中心にした構成です。netpack の XIAO が WiFi を出し（ホストモード）、タイマーとスマホがその WiFi に接続します。タイマーからの MSP は今まで通り UART → ESP-NOW ブリッジ → ゴーグルのバックパックへ届きます（ブリッジの ESP-NOW は別のボードで、チャンネル 1 のまま）。
+netpack を中心にした構成です。netpack の XIAO が WiFi を出し（ホストモード）、タイマーとスマホがその WiFi に接続します。タイマーからの MSP は今まで通り UART → ELRSバックパック-ブリッジ → ゴーグルのバックパックへ届きます（ブリッジの ESP-NOW は別のボードで、チャンネル 1 のまま）。
 
 ```
  スマホ（観戦・管理）──┐
- FPV C5 Lap Timer ────┼── WiFi「ELRS-Netpack」── netpack XIAO ──UART── ESP-NOW ブリッジ ── ゴーグル
+ FPV C5 Lap Timer ────┼── WiFi「ELRS-Netpack」── netpack XIAO ──UART── ELRSバックパック-ブリッジ ── ゴーグル
  （クライアントモード）  ┘     （ch 6〜11）          │USB
                                                     └── Android スマホ（USB テザリング）── インターネット
 ```
@@ -413,4 +413,4 @@ Settings → ELRS バックパック 一般設定
 - Seeed Studio XIAO ESP32-S3 ドキュメント: [wiki.seeedstudio.com](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - このフォーク: [yanazoo/elrs-netpack](https://github.com/yanazoo/elrs-netpack)
 
-デュアル MCU ESP-NOW ブリッジ構成は、ESP32-S3 の 2.4 GHz 無線を WiFi STA と ESP-NOW で共有することによるハードウェア制限を解決するために開発されました。
+デュアル MCU ELRSバックパック-ブリッジ構成は、ESP32-S3 の 2.4 GHz 無線を WiFi STA と ESP-NOW で共有することによるハードウェア制限を解決するために開発されました。
