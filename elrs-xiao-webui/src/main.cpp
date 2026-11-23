@@ -271,7 +271,7 @@ static String htmlHead(const char *title)
          "h1{font-size:1.25em;color:#f0f0f0;margin:0 0 2px}"
          "h2{font-size:1.05em;color:#aaa;margin:12px 0 4px}"
          ".topbar{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap}"
-         ".rssi{font-size:.78em;color:#666;letter-spacing:.5px}"
+         ".rssi{font-size:.78em;color:#fff;letter-spacing:.5px}"
          "nav{display:flex;align-items:center;gap:10px;margin:6px 0}"
          "nav a{text-decoration:none;color:#5b9bd5;font-size:.9em}"
          "nav a:hover{color:#79b8f3}"
