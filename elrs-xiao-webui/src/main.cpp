@@ -40,6 +40,11 @@ static bool     g_apRetrySta        = false;
 static uint32_t g_apRetryMs         = 0;
 static const uint32_t AP_RETRY_INTERVAL_MS = 15000;
 static uint32_t g_wifiLostMs        = 0;
+// A short drop (a missed beacon, a router's key change) is reconnected
+// quietly: the buzzer and the LED tell only after WIFI_ALARM_MS without WiFi.
+static const uint32_t WIFI_ALARM_MS = 5000;
+static bool     g_wifiAlarmed       = false;
+static volatile uint8_t g_wifiLostReason = 0;   // the last disconnect's reason (for the log)
 static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラグ（イベントタスク → loop）
 // Host mode: a device left our WiFi (event task → loop). If it was FPV C5
 // Lap Timer, its TCP session ends at once (keepalive alone takes ~11 s).
@@ -1126,6 +1131,11 @@ static void wifiConnect()
 
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
+    // No modem sleep as a client: dozing between beacons, the station misses
+    // some and the router (or the ESP) takes it for gone (a short drop that
+    // used to set off the WiFi warning while the WiFi was fine). FPV C5 Lap
+    // Timer does the same.
+    WiFi.setSleep(false);
     WiFi.setAutoReconnect(false);  // 自動再接続は checkWifiState() で制御
     // Older routers (WPA only): the library refuses below WPA2 by default.
     WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
@@ -1165,6 +1175,7 @@ static void checkApRetry()
         dnsServer.stop();
         WiFi.softAPdisconnect(true);
         WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
         apModeActive = false;
         g_apRetrySta = false;
         g_wifiLostMs = 0;
@@ -1192,10 +1203,12 @@ static void checkWifiState()
         if (g_wifiLostMs != 0) {
             // WiFi 復旧 → ブザー即停止 + TCP サーバー・mDNS 再起動
             if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
+            LOG.printf("[wifi] reconnected after %lu ms  IP=%s\n", (unsigned long)(millis() - g_wifiLostMs),
+                       WiFi.localIP().toString().c_str());
             g_wifiLostMs = 0;
-            LOG.printf("[wifi] reconnected IP=%s\n", WiFi.localIP().toString().c_str());
             startNetServices();
-            beepDouble();
+            if (g_wifiAlarmed) beepDouble();   // a short drop passes without a sound
+            g_wifiAlarmed = false;
         }
         return;
     }
@@ -1206,25 +1219,33 @@ static void checkWifiState()
     if (g_wifiLostMs == 0) {
         g_wifiLostMs    = now;
         lastReconnectMs = now;
-        LOG.println("[wifi] disconnected — reconnecting");
+        LOG.printf("[wifi] disconnected (reason %u) — reconnecting\n", g_wifiLostReason);
         // WiFi 切断起因の TCP 切断は静かにクリア
         g_tcpSessionActive = false;
         g_tcpEverConnected = false;
         tcpClient.stop();
-        // 5 秒間の警告ブザー開始（電圧アラーム中は重複を避ける）
+        g_wifiAlarmed = false;
+        WiFi.reconnect();
+        return;
+    }
+
+    // Still without WiFi after WIFI_ALARM_MS: now the warning (5 s of
+    // buzzer, the LED blinking fast; not over the voltage alarm).
+    if (!g_wifiAlarmed && now - g_wifiLostMs >= WIFI_ALARM_MS) {
+        g_wifiAlarmed = true;
+        LOG.println("[wifi] still disconnected: warning");
         if (g_buzzerEnabled && !g_alarmActive) {
             buzzerRawOn();
             g_wifiBuzzerActive  = true;
             g_wifiBuzzerStartMs = now;
         }
-        WiFi.reconnect();
-        return;
     }
 
     // 60 秒経過 → AP モード
     if (now - g_wifiLostMs >= 60000) {
         if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
         g_wifiLostMs = 0;
+        g_wifiAlarmed = false;
         LOG.println("[wifi] 60 s without connection — starting captive portal");
         startCaptivePortal();
         return;
@@ -1547,8 +1568,8 @@ static void updateNotifyLed()
         return;
     }
 
-    // WiFi 未接続 → 0 ↔ 255 の 80ms 高速点滅（ホストモードは自分の WiFi なので対象外）
-    if (!g_hostActive && WiFi.status() != WL_CONNECTED) {
+    // WiFi 未接続（5 秒以上）→ 0 ↔ 255 の 80ms 高速点滅（ホストモードは自分の WiFi なので対象外）
+    if (!g_hostActive && g_wifiLostMs && g_wifiAlarmed) {
         nlWrite((now % 160 < 80) ? 255 : 0);
         return;
     }
@@ -1623,7 +1644,8 @@ void setup()
         g_apLeftEvent = true;
     }, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
 
-    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+        g_wifiLostReason = info.wifi_sta_disconnected.reason;
         g_wifiLostEvent = true;
     }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
