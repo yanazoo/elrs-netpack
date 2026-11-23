@@ -191,9 +191,8 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 **USB tethering**: on / off (host mode only).
 
 **Mode switch** (v2.3.0): host or client mode chosen by a switch on the box.
-- On the settings page, "物理スイッチ" (mode switch): **none (default) / A contact / B contact**.
-- Wire it between **D4 (GPIO5) and GND** (internal pull-up, no resistor).
-- **Switch ON = host mode, OFF = client mode.** An A contact closes when ON, a B contact opens when ON.
+- On the settings page, "物理スイッチ" (mode switch): **none (default) / A contact (ON = host mode) / B contact (OFF = host mode)**.
+- Wire it between **D4 (GPIO5) and GND** (internal pull-up, no resistor). Contact closed = host mode, open = client mode.
 - It is read **at start-up only**: after switching, power-cycle (or restart). Switching while running does nothing.
 - While a switch is set, it decides the mode over the page's choice (kept for when the switch is set to none). The page shows the switch and the mode at this start-up.
 
@@ -360,7 +359,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `netMode` | UChar | 0 | Connection (0 = client, 1 = host); the mode switch, when set, decides instead |
-| `swMode` | UChar | 0 | Mode switch (0 = none, 1 = A contact, 2 = B contact) |
+| `swMode` | UChar | 0 | Mode switch (0 = none, 1 = A contact: ON = host, 2 = B contact: OFF = host) |
 | `ss0`–`ss4` / `sp0`–`sp4` | String | (empty) | Client networks 1-5: SSID / password (v2.3.0) |
 | `nets` | Bool | false | The 5 networks are saved (false: `ssid` / `wifiPass` become the first) |
 | `staSel` | UChar | 0 | The selected network (0-4) |

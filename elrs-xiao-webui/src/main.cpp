@@ -510,16 +510,16 @@ static String pageWifi(const String &msg = "")
     p += ">"; p += L("Host: the netpack's own WiFi (FPV C5 Lap Timer and phones join it)", "ホスト：netpack が WiFi を出す（FPV C5 Lap Timer やスマホが接続）"); p += "</label>";
     p += "<label>"; p += L("Mode switch (physical)", "物理スイッチ（モードの切り替え）"); p += "<select name='swMode'>";
     {
-        const char *en[] = {"None (the choice above)", "Yes: A contact (normally open)", "Yes: B contact (normally closed)"};
-        const char *jp[] = {"なし（上の選択で決める）", "あり：a 接点（ON で閉じる）", "あり：b 接点（ON で開く）"};
+        const char *en[] = {"None (the choice above)", "A contact (ON = host mode)", "B contact (OFF = host mode)"};
+        const char *jp[] = {"なし（上の選択で決める）", "a 接点（ON でホストモード）", "b 接点（OFF でホストモード）"};
         for (int k = 0; k < 3; k++) {
             p += "<option value='"; p += String(k); p += "'"; if (k == g_swMode) p += " selected";
             p += ">"; p += L(en[k], jp[k]); p += "</option>";
         }
     }
     p += "</select></label><div class='note'>";
-    p += L("Wire it between D4 (GPIO5) and GND (internal pull-up). Switch ON = host mode, OFF = client mode. Read at start-up only: a change takes effect at the next restart. While a switch is set, it decides the mode over the choice above.",
-           "D4（GPIO5）と GND の間につなぎます（内部プルアップ）。スイッチ ON でホストモード、OFF でクライアントモード。読むのは起動したときだけで、切り替えは次の再起動から。スイッチ「あり」の間は、上の選択よりスイッチが優先されます。");
+    p += L("Between D4 (GPIO5) and GND. Read at start-up (takes effect after a restart).",
+           "D4（GPIO5）と GND の間につなぎます。起動時に読みます（切り替えは再起動後）。");
     if (g_swMode) {
         p += "<br><b>"; p += L("At this start-up: switch ", "今回の起動：スイッチ "); p += g_swOn ? "ON" : "OFF";
         p += L(" → ", " → "); p += g_netMode ? L("host mode", "ホストモード") : L("client mode", "クライアントモード"); p += "</b>";
@@ -1257,8 +1257,8 @@ static void handleWifiPost()
         String p = htmlHead(L("WiFi Settings", "WiFi設定"));
         p += "<div class='msg'>";
         if (sw) {
-            p += L("Saved. Restarting: the mode switch decides host (ON) or client (OFF) mode.",
-                   "保存しました。再起動します。ホストモードかクライアントモードかは物理スイッチで決まります（ON でホスト、OFF でクライアント）。");
+            p += L("Saved. Restarting: the mode switch decides host or client mode.",
+                   "保存しました。再起動します。ホストモードかクライアントモードかは物理スイッチで決まります。");
         } else {
             p += mode == 1 ? L("Saved. Restarting in host mode: join the WiFi ", "保存しました。ホストモードで再起動します。WiFi ")
                            : L("Saved. Restarting in client mode.", "保存しました。クライアントモードで再起動します。");
@@ -1336,8 +1336,10 @@ static void readModeSwitch()
     int low = 0;
     for (int i = 0; i < 5; i++) { low += digitalRead(MODE_SW_PIN) == LOW; delay(5); }
     bool closed = low >= 3;
-    g_swOn = (g_swMode == 1) ? closed : !closed;   // A: ON closes it; B: ON opens it
-    g_netMode = g_swOn ? 1 : 0;
+    // Host mode with the contact closed: an A contact when switched ON,
+    // a B contact when OFF.
+    g_swOn = (g_swMode == 1) ? closed : !closed;   // the switch as turned (for the page)
+    g_netMode = closed ? 1 : 0;
     LOG.printf("[boot] mode switch (%s contact): %s → %s mode\n", g_swMode == 1 ? "A" : "B", g_swOn ? "ON" : "OFF",
                g_netMode ? "host" : "client");
 }
