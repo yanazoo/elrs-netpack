@@ -2,7 +2,8 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <HardwareSerial.h>
-#include <WebServer.h>
+#include "web.h"
+#include "mdns.h"
 #include <Preferences.h>
 #include <DNSServer.h>
 #include "esp_wifi.h"
@@ -29,7 +30,6 @@ static HardwareSerial uart(1);
 
 // ── Web / AP globals ──────────────────────────────────────────────────────────
 
-static WebServer   webServer(80);
 static Preferences prefs;
 static DNSServer   dnsServer;
 
@@ -46,6 +46,10 @@ static const uint32_t WIFI_ALARM_MS = 5000;
 static bool     g_wifiAlarmed       = false;
 static volatile uint8_t g_wifiLostReason = 0;   // the last disconnect's reason (for the log)
 static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラグ（イベントタスク → loop）
+// From the web handlers (AsyncTCP task) to loop(): a beep, joining the
+// client network again.
+static volatile bool     g_beepReq     = false;
+static volatile uint32_t g_reconnectAt = 0;
 // Host mode: a device left our WiFi (event task → loop). If it was FPV C5
 // Lap Timer, its TCP session ends at once (keepalive alone takes ~11 s).
 static volatile bool g_apLeftEvent = false;
@@ -413,26 +417,34 @@ static void staBegin(int i)
 
 // What the netpack is doing now: its WiFi, who sends it MSP (the timer:
 // a link to its page), the devices on its WiFi, the USB tethering.
-// FPV C5 Lap Timer's address: the one sending MSP, else looked up by its
-// mDNS name on the same WiFi (cached 20 s: a lookup waits up to 0.6 s).
-static IPAddress g_lapIp;
-static uint32_t  g_lapAt = 0;
-static IPAddress findLapTimer()
-{
-    if (tcpClient && tcpClient.connected()) return tcpClient.remoteIP();
-    if (apModeActive) return IPAddress();   // the setup WiFi: no mDNS
-    if (g_lapAt && millis() - g_lapAt < 20000) return g_lapIp;
-    g_lapIp = MDNS.queryHost("fpv-c5-lt", 600);
-    g_lapAt = millis() | 1;
-    return g_lapIp;
-}
+// FPV C5 Lap Timer's address, kept by loop() for the pages and the DNS
+// relay (they never wait): the MSP peer, else the last answer of an mDNS
+// lookup for fpv-c5-lt.local made in the background every 30 s.
+static volatile uint32_t g_mspPeer = 0;   // the MSP (TCP) peer, 0 = none
+static volatile uint32_t g_lapIp   = 0;   // the last mDNS answer
 
-// FPV C5 Lap Timer's address without waiting (for DNS): the MSP peer, or
-// the last mDNS answer.
-static IPAddress knownLapTimer()
+static IPAddress knownLapTimer() { return IPAddress(g_mspPeer ? g_mspPeer : g_lapIp); }
+
+static void lookUpLapTimer()
 {
-    if (tcpClient && tcpClient.connected()) return tcpClient.remoteIP();
-    return g_lapIp;
+    static mdns_search_once_t *search = nullptr;
+    static uint32_t last = 0;
+    if (search) {
+        mdns_result_t *res = nullptr;
+        uint8_t n = 0;
+        if (!mdns_query_async_get_results(search, 0, &res, &n)) return;   // still asking
+        for (mdns_result_t *r = res; r; r = r->next)
+            for (mdns_ip_addr_t *a = r->addr; a; a = a->next)
+                if (a->addr.type == ESP_IPADDR_TYPE_V4) g_lapIp = a->addr.u_addr.ip4.addr;
+        if (res) mdns_query_results_free(res);
+        mdns_query_async_delete(search);
+        search = nullptr;
+        return;
+    }
+    uint32_t now = millis();
+    if (g_mspPeer || apModeActive || (last && now - last < 30000)) return;
+    last = now;
+    search = mdns_query_async_new("fpv-c5-lt", nullptr, nullptr, MDNS_TYPE_A, 1000, 1, nullptr);
 }
 
 static String statusCard()
@@ -440,7 +452,7 @@ static String statusCard()
     String p = "<div class='card st'>";
     char b[96];
     {
-        IPAddress lt = findLapTimer();
+        IPAddress lt = knownLapTimer();
         p += "<b>FPV C5 Lap Timer</b>：";
         if ((uint32_t)lt) {
             String u = "http://" + lt.toString() + "/";
@@ -459,9 +471,8 @@ static String statusCard()
         p += L("Client mode: ", "クライアントモード："); p += htmlEsc(WiFi.SSID());
         p += "（"; p += WiFi.localIP().toString(); p += "）<br>";
     }
-    if (tcpClient && tcpClient.connected()) {
-        String ip = tcpClient.remoteIP().toString();
-        p += L("MSP: connected (", "MSP：接続中（"); p += ip; p += L(")", "）"); p += "<br>";
+    if (g_mspPeer) {
+        p += L("MSP: connected (", "MSP：接続中（"); p += IPAddress(g_mspPeer).toString(); p += L(")", "）"); p += "<br>";
     } else {
         p += L("MSP: not connected", "MSP：未接続"); p += "<br>";
     }
@@ -1052,9 +1063,10 @@ static void learnLapMac()
         if (!g_lapMacKnown || memcmp(g_lapMac, pairs[i].mac, 6)) {
             memcpy(g_lapMac, pairs[i].mac, 6);
             g_lapMacKnown = true;
-            prefs.begin("elrs", false);
-            prefs.putBytes("lapMac", g_lapMac, 6);
-            prefs.end();
+            Preferences pr;   // its own handle: the web handlers use `prefs` on another task
+            pr.begin("elrs", false);
+            pr.putBytes("lapMac", g_lapMac, 6);
+            pr.end();
             LOG.printf("[host] FPV C5 Lap Timer is " MACSTR "\n", MAC2STR(g_lapMac));
         }
         return;
@@ -1398,21 +1410,19 @@ static void handleWifiPost()
         }
         p += "</div></body></html>";
         webServer.send(200, "text/html", p);
-        beepShort();
-        delay(800);
-        ESP.restart();
+        g_beepReq = true;
+        webServer.restartSoon(800);
         return;
     }
     if (runMode == 1) {   // host mode, nothing of it changed
         webServer.send(200, "text/html", pageWifi(L("Saved.", "保存しました。")));
-        beepShort();
+        g_beepReq = true;
         return;
     }
     webServer.send(200, "text/html",
         pageWifi(L("Saved. Connecting\xe2\x80\xa6", "保存しました。接続中…")));
-    beepShort();
-    delay(420);
-    wifiConnect();
+    g_beepReq = true;
+    g_reconnectAt = (millis() + 420) | 1;   // loop() joins the network (not in the handler)
 }
 
 static void handleVoltagePost()
@@ -1448,7 +1458,7 @@ static void handleVoltagePost()
 
     webServer.send(200, "text/html",
         pageVoltage(L("Settings saved.", "設定を保存しました。")));
-    beepShort();
+    g_beepReq = true;
 }
 
 static void handleNotFound()
@@ -1651,9 +1661,6 @@ void setup()
 
     wifiConnect();
 
-    const char *hdrs[] = {"Referer", "Cookie"};
-    webServer.collectHeaders(hdrs, 2);
-
     webServer.on("/",                    HTTP_GET,  handleRoot);
     webServer.on("/wifi",                HTTP_GET,  handleWifiGet);
     webServer.on("/wifi",                HTTP_POST, handleWifiPost);
@@ -1665,12 +1672,13 @@ void setup()
     webServer.on("/voltage",             HTTP_POST, handleVoltagePost);
     webServer.on("/lang",                HTTP_GET,  handleLangToggle);
     // Firmware update: from the internet (a router, or USB tethering) or a file.
-    fwUpdateRoutes(webServer,
+    fwUpdateRoutes(
         [] { return (!g_hostActive && !apModeActive && WiFi.status() == WL_CONNECTED) || tetherNetif() != nullptr; },
         htmlHead, [] { return g_langJa; }, authed);
     webServer.on("/generate_204",        HTTP_GET,  handleRoot);
     webServer.on("/hotspot-detect.html", HTTP_GET,  handleRoot);
     webServer.on("/ncsi.txt",            HTTP_GET,  handleRoot);
+    webServer.on("/favicon.ico",         HTTP_GET,  [] { webServer.send(204, "text/plain", ""); });
     webServer.onNotFound(handleNotFound);
     webServer.begin();
     LOG.println("[web] HTTP server on port 80");
@@ -1697,7 +1705,11 @@ void loop()
         LOG.printf("[host] address " IPSTR " given %lu ms after joining\n", IP2STR((esp_ip4_addr_t *)&g_ipLogIp),
                    (unsigned long)g_ipLogMs);
     }
-    webServer.handleClient();
+    webServer.loop();
+    if (g_beepReq) { g_beepReq = false; beepShort(); }
+    if (g_reconnectAt && (int32_t)(millis() - g_reconnectAt) >= 0) { g_reconnectAt = 0; wifiConnect(); }
+    g_mspPeer = (tcpClient && tcpClient.connected()) ? (uint32_t)tcpClient.remoteIP() : 0;
+    if (g_hostActive || WiFi.status() == WL_CONNECTED) lookUpLapTimer();
     updateLed();
     updateVoltage();
     updateNotifyLed();

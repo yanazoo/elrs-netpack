@@ -8,6 +8,7 @@
 #include <WiFi.h>
 #include <time.h>
 #include "log.h"
+#include "web.h"
 
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
@@ -28,7 +29,6 @@ const char *const kFwAsset  = "elrs-netpack-xiao_esp32s3-firmware.bin";
 enum State : uint8_t { kIdle, kChecking, kChecked, kUpdating, kDone, kFailed };
 const char *const kStateNames[] = {"idle", "checking", "checked", "updating", "done", "failed"};
 
-WebServer *g_web = nullptr;
 bool (*g_online)() = nullptr;
 String (*g_head)(const char *) = nullptr;
 bool (*g_ja)() = nullptr;
@@ -37,8 +37,8 @@ bool (*g_authed)() = nullptr;
 bool authed() { return !g_authed || g_authed(); }
 void toLogin()
 {
-    g_web->sendHeader("Location", "/login?next=/update", true);
-    g_web->send(302, "text/plain", "");
+    webServer.sendHeader("Location", "/login?next=/update", true);
+    webServer.send(302, "text/plain", "");
 }
 
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
@@ -223,7 +223,7 @@ String statusJson()
     return String(buf);
 }
 
-void sendJson(int code, const char *body) { g_web->send(code, "application/json", body); }
+void sendJson(int code, const char *body) { webServer.send(code, "application/json", body); }
 
 // ── The page ─────────────────────────────────────────────────────────────────
 
@@ -302,25 +302,26 @@ String page(const String &msg = "")
 void handlePage()
 {
     if (!authed()) return toLogin();
-    g_web->send(200, "text/html", page());
+    webServer.send(200, "text/html", page());
 }
 
-void handleUpload()
+// The file as it arrives (AsyncTCP task): written straight to the other
+// app slot, so the page's progress bar is the writing's.
+void handleUpload(AsyncWebServerRequest *r, const String &name, size_t index, uint8_t *data, size_t len, bool final)
 {
-    HTTPUpload &u = g_web->upload();
-    if (u.status == UPLOAD_FILE_START) {
-        LOG.printf("[update] file %s\n", u.filename.c_str());
+    webServer.req = r;
+    if (index == 0) {
+        LOG.printf("[update] file %s\n", name.c_str());
         uploadBegan = true;
         uploadOk = authed() && !taskRunning && Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
-    } else if (u.status == UPLOAD_FILE_WRITE) {
-        if (uploadOk && Update.write(u.buf, u.currentSize) != u.currentSize) uploadOk = false;
-    } else if (u.status == UPLOAD_FILE_END) {
-        uploadOk = uploadOk && Update.end(true);
-        LOG.printf("[update] %s (%u bytes)\n", uploadOk ? "ok" : Update.errorString(), (unsigned)u.totalSize);
-    } else if (u.status == UPLOAD_FILE_ABORTED) {
-        Update.abort();
-        uploadOk = false;
     }
+    if (uploadOk && len && Update.write(data, len) != len) uploadOk = false;
+    if (final) {
+        uploadOk = uploadOk && Update.end(true);
+        if (!uploadOk && Update.isRunning()) Update.abort();
+        LOG.printf("[update] %s (%u bytes)\n", uploadOk ? "ok" : Update.errorString(), (unsigned)(index + len));
+    }
+    webServer.req = nullptr;
 }
 
 void handleUploadDone()
@@ -328,41 +329,40 @@ void handleUploadDone()
     bool ok = uploadBegan && uploadOk;
     uploadBegan = false;
     if (!authed()) {
-        if (g_web->hasArg("ajax")) g_web->send(403, "application/json", "{\"ok\":false,\"error\":\"login\"}");
+        if (webServer.hasArg("ajax")) webServer.send(403, "application/json", "{\"ok\":false,\"error\":\"login\"}");
         else toLogin();
         return;
     }
-    if (g_web->hasArg("ajax")) {   // the page's progress bar
+    if (webServer.hasArg("ajax")) {   // the page's progress bar
         String e = ok ? "" : String(Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"));
         e.replace("\"", "'");
-        g_web->send(200, "application/json", ok ? String("{\"ok\":true}") : "{\"ok\":false,\"error\":\"" + e + "\"}");
-        if (ok) { delay(800); ESP.restart(); }
+        webServer.send(200, "application/json", ok ? String("{\"ok\":true}") : "{\"ok\":false,\"error\":\"" + e + "\"}");
+        if (ok) webServer.restartSoon(800);
         return;
     }
     if (!ok) {
-        g_web->send(200, "text/html", page(String(L("Update failed: ", "更新できませんでした：")) +
+        webServer.send(200, "text/html", page(String(L("Update failed: ", "更新できませんでした：")) +
                                            (Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"))));
         return;
     }
-    g_web->send(200, "text/html", page(L("Written. Restarting…", "書き込みました。再起動します…")));
-    delay(800);
-    ESP.restart();
+    webServer.send(200, "text/html", page(L("Written. Restarting…", "書き込みました。再起動します…")));
+    webServer.restartSoon(800);
 }
 
 }   // namespace
 
-void fwUpdateRoutes(WebServer &web, bool (*online)(), String (*head)(const char *), bool (*jaFn)(), bool (*authedFn)())
+void fwUpdateRoutes(bool (*online)(), String (*head)(const char *), bool (*jaFn)(), bool (*authedFn)())
 {
+    Web &web = webServer;
     g_authed = authedFn;
-    g_web = &web;
     g_online = online;
     g_head = head;
     g_ja = jaFn;
     web.on("/update", HTTP_GET, handlePage);
-    web.on("/update", HTTP_POST, handleUploadDone, handleUpload);
+    web.onUpload("/update", handleUploadDone, handleUpload);
     // State: read by the page while the netpack restarts (no login cookie
     // check needed for reading it).
-    web.on("/api/update", HTTP_GET, [] { g_web->send(200, "application/json", statusJson()); });
+    web.on("/api/update", HTTP_GET, [] { webServer.send(200, "application/json", statusJson()); });
     web.on("/api/update/check", HTTP_POST, [] {
         if (!authed()) return sendJson(403, R"({"ok":false,"reason":"login"})");
         if (!g_online()) return sendJson(409, R"({"ok":false,"reason":"offline"})");
