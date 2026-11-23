@@ -1,251 +1,54 @@
-# ELRS Netpack — TCP → WiFi → ELRS Backpack Bridge
+# ELRS Netpack — from WiFi (TCP) to the ELRS backpacks
 
 English | [日本語](README.ja.md)
 
 > [!IMPORTANT]
-> This fork builds a **TCP → WiFi → ESP-NOW** backpack communication system using **two ESP32 boards**, replacing the original single-board Ethernet design.
-> It is **not** compatible with the original Waveshare ESP32-S3 Ethernet board.
+> This fork uses **two ESP32 boards** to build a **TCP → WiFi → ESP-NOW** backpack link. It is **not compatible** with the original Waveshare ESP32-S3 Ethernet board.
 
 > [!NOTE]
-> This project is **not** officially affiliated with or supported by the ExpressLRS organisation.
+> This project is not affiliated with the ExpressLRS organization.
 
 ---
 
 ## Overview
 
-RotorHazard sends MSP packets over TCP. This project bridges those packets all the way to an ELRS VRx backpack over ESP-NOW, using two ESP32 boards connected by UART:
+A lap timer (**FPV C5 Lap Timer** or **RotorHazard**) sends MSP packets (the goggles' OSD, race signals). This system takes them over WiFi (TCP) and delivers them to the **ELRS VRx backpacks** (FPV goggles) over ESP-NOW. It is built from two boards.
+
+| Board | Firmware | Role |
+|---|---|---|
+| **netpack XIAO** (Seeed XIAO ESP32-S3) | `elrs-xiao-webui/` | WiFi, TCP server (port 8080), web settings; passes the MSP to the bridge over UART |
+| **ELRS Backpack bridge** (XIAO ESP32-C3 / XIAO ESP32-C5 / ESP32 Wrover-E) | `elrs-espnow-bridge/` | ESP-NOW (2.4 GHz, ch 1) to and from the goggles' and radios' backpacks |
 
 ```
-RotorHazard (Raspberry Pi)
-        │  TCP port 8080
+ FPV C5 Lap Timer / RotorHazard
+        │  WiFi, TCP 8080
         ▼
-┌─────────────────────┐
-│  XIAO ESP32-S3      │  elrs-xiao-webui/
-│  WiFi STA + Web UI  │  Receives TCP, forwards via UART
-│  TCP server + mDNS  │
-└────────┬────────────┘
-         │  UART 115200 baud
-         │  D0(GPIO1) TX ──► GPIO26 RX
-         │  D1(GPIO2) RX ◄── GPIO27 TX
-         │  GND        ◄──►  GND
-         ▼
-┌─────────────────────┐
-│  ESP32 Wrover-E     │  elrs-espnow-bridge/
-│  ESP-NOW only       │  Sends/receives ESP-NOW packets
-└────────┬────────────┘
-         │  ESP-NOW (2.4 GHz, ch 1)
-         ▼
-   ELRS VRx Backpack (FPV Goggles)
+┌──────────────────────────┐
+│ netpack XIAO (S3)          │  elrs-xiao-webui/
+│ WiFi (client / host)       │  TCP ⇄ UART, web settings, mDNS
+└────────────┬─────────────┘
+             │  UART 115200 baud (TX / RX / GND)
+             ▼
+┌──────────────────────────┐
+│ ELRS Backpack bridge       │  elrs-espnow-bridge/
+│ XIAO C3 / XIAO C5 / Wrover-E │
+└────────────┬─────────────┘
+             │  ESP-NOW (2.4 GHz, ch 1)
+             ▼
+   ELRS VRx backpacks (goggles), radios' backpacks
 ```
 
-**Why two boards?**
-The ESP32-S3 has one shared 2.4 GHz radio. Running WiFi STA and ESP-NOW simultaneously on the same chip causes packet loss and peer-list corruption — a hardware limitation. Splitting the roles across two boards connected by UART solves this completely.
+**Why two boards?** An ESP32 has one 2.4 GHz radio. WiFi (a router or the timer's WiFi) and ESP-NOW (fixed on ch 1) on one board don't share a channel and packets get lost. Splitting the roles over two boards joined by UART solves it.
+
+> FPV C5 Lap Timer can also take the bridge **wired straight to the timer over UART** (no netpack XIAO; see the timer's [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)). The netpack is for a bridge that can't sit next to the timer, and for RotorHazard.
 
 ---
 
-## Hardware
+## Two ways to run it
 
-| Part | Notes |
-|---|---|
-| Seeed Studio XIAO ESP32-S3 | External-antenna (Sense) model recommended |
-| ESP32 Wrover-E | Or any 4 MB+ ESP32 dev board |
-| 3 jumper wires | TX / RX / GND |
-| USB-C cable | Data-capable, for flashing XIAO |
-| USB-A/micro cable | For flashing ESP32 |
-| Raspberry Pi | Running RotorHazard |
+**A. Client mode (default)** — the netpack XIAO joins the timer's WiFi (a timer in host mode) or the venue's router. The timer (or RotorHazard) finds the netpack as `elrs-netpack.local` and connects to TCP 8080.
 
----
-
-## Wiring
-
-| XIAO ESP32-S3 | ESP32 Wrover-E |
-|---|---|
-| D0 / GPIO1 (TX) | GPIO26 (RX) |
-| D1 / GPIO2 (RX) | GPIO27 (TX) |
-| GND | GND |
-
-> Do **not** connect 3V3 / 5V between the boards — power each board separately via USB.
-
----
-
-## Prerequisites
-
-1. **VS Code** — [code.visualstudio.com](https://code.visualstudio.com/)
-2. **PlatformIO IDE extension** — install from the VS Code Extensions tab (`Ctrl+Shift+X` → search "PlatformIO IDE")
-3. Clone this repository:
-   ```powershell
-   git clone https://github.com/yanazoo/elrs-netpack
-   cd elrs-netpack
-   ```
-
----
-
-## Configuration
-
-The XIAO firmware (`elrs-xiao-webui/`) needs **no source-file editing**. WiFi credentials are entered through the captive portal on first boot — see [Flash XIAO ESP32-S3](#flash-xiao-esp32-s3-elrs-xiao-webui) and [Default AP Credentials](#default-ap-credentials-elrs-xiao-webui) below.
-
-The ESP-NOW side (`elrs-espnow-bridge/`) also needs no configuration; its channel is fixed at compile time via `ESPNOW_CHANNEL` (default 1) in `platformio.ini`.
-
----
-
-## Flash ESP32 Wrover-E (`elrs-espnow-bridge/`)
-
-1. Open the folder in VS Code:
-   **File → Open Folder → `elrs-espnow-bridge/`**
-2. Connect ESP32 via USB
-3. PlatformIO sidebar → **`esp32dev` → General → Upload**
-
-**Expected serial output:**
-```
-[boot] ESP-NOW bridge (UART RX=GPIO26 TX=GPIO27)
-[wifi] channel fixed to 1
-[espnow] (re)initialized
-[boot] ready
-```
-
-### Using a XIAO ESP32-C3 instead
-
-A Seeed Studio XIAO ESP32-C3 works in place of the ESP32 Wrover-E (PlatformIO env **`xiao_esp32c3`**):
-D7 / GPIO20 (RX) ← host TX, D6 / GPIO21 (TX) → host RX, GND ↔ GND.
-
-```
-pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload
-```
-
-The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21)`.
-
-### Using a XIAO ESP32-C5 instead (v2.2.1)
-
-A Seeed Studio XIAO ESP32-C5 works too (PlatformIO env **`xiao_esp32c5`**, pioarduino), wired on the same D7 / D6 as the XIAO C3:
-D7 / GPIO12 (RX) ← host TX, D6 / GPIO11 (TX) → host RX, GND ↔ GND. The C5 can do 5 GHz; the bridge stays on 2.4 GHz channel 1.
-
-```
-pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload
-```
-
-The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO12 TX=GPIO11)`.
-
----
-
-## elrs-xiao-webui — XIAO Firmware (Web UI Edition)
-
-`elrs-xiao-webui/` is the XIAO firmware. It provides the full TCP MSP bridge plus a **Web UI, captive portal, battery voltage monitor, buzzer, and LED notifications**.
-
----
-
-### Additional Hardware (elrs-xiao-webui)
-
-| Part | Notes |
-|---|---|
-| Passive buzzer | Connected across GPIO4(+) and GPIO6(−) |
-| 7-color auto-cycling LED | GPIO9 (D10) + **100 Ω resistor** in series |
-| 2× 100 kΩ resistor | Voltage divider for LiPo monitoring (optional) |
-| LiPo battery | 1S recommended (shared power with ESP32 Wrover-E) |
-
----
-
-### Additional Wiring (elrs-xiao-webui)
-
-| XIAO GPIO | Pin label | Connected to |
-|---|---|---|
-| GPIO3 | D2 / A0 | Voltage divider midpoint (LiPo+ → R1 100kΩ → GPIO3 → R2 100kΩ → GND) |
-| GPIO4 | D3 | Buzzer positive (+) |
-| GPIO6 | D5 | Buzzer negative (−) |
-| GPIO9 | D10 | LED anode (+ 100 Ω → GND) |
-| GPIO21 | — | Built-in LED (active-LOW, onboard) |
-
-> **Important:** Always use a **100 Ω** series resistor with the notification LED to protect GPIO9.
-
----
-
-### Ways to write the firmware (from v2.2.0)
-
-| Way | For | How |
-|---|---|---|
-| **Web flasher** (latest) | netpack XIAO, ELRS Backpack bridge (pick XIAO C3 / XIAO C5 / Wrover-E) | Open [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) in Chrome / Edge on a PC and press the device's "書き込む" |
-| **Web flasher** (your own files) | same | Drop .bin files (a test build, an older release) or a release zip on "ファイルを指定して書き込む". Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot |
-| **Online** (a button) | netpack XIAO | netpack settings → "更新" (Update) → "🔍 最新版を確認" → "⬇️ … に更新". Needs the internet (a router in client mode, or USB tethering in host mode) |
-| **A file** | netpack XIAO | netpack settings → "更新" → pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin` or the one in the release zip) |
-| **PlatformIO** (from the source on GitHub) | all | below |
-
-- A release carries the zips (bootloader, partitions, firmware), one-file `*-full.bin` images (written at `0x0`, for esptool-js and others), and `elrs-netpack-xiao_esp32s3-firmware.bin` and `elrs-netpack-version.txt` for the online update.
-- Settings (WiFi and so on) are kept every way (unless you tick erase).
-- GitHub Actions builds the web flasher at each release and puts it on GitHub Pages (Settings → Pages → Source must be **GitHub Actions**).
-
-### Flash XIAO ESP32-S3 (`elrs-xiao-webui/`)
-
-1. Open the folder in VS Code:
-   **File → Open Folder → `elrs-xiao-webui/`**
-2. Wait for PlatformIO to install packages (first time only)
-3. Connect XIAO via USB-C
-4. PlatformIO sidebar → **`xiao_esp32s3` → General → Upload**
-
-If a specific COM port is needed, add to `platformio.ini`:
-```ini
-upload_port = COM3   ; change to your port number
-```
-
-If flashing fails, enter bootloader mode:
-```
-① Hold BOOT button
-② Press and release RST
-③ Release BOOT
-```
-
-**Expected serial output (first boot — WiFi not configured):**
-```
-[boot] XIAO ESP32-S3 WiFi bridge + Web UI
-[wifi] not configured — starting captive portal immediately
-[ap] IP=192.168.4.1
-[web] HTTP server on port 80
-[boot] ready
-```
-
----
-
-### Features (elrs-xiao-webui)
-
-| Feature | Description |
-|---|---|
-| TCP MSP bridge | Full TCP ⇄ UART MSP bridge to the ESP-NOW board |
-| Web UI | Dark-theme settings page at `http://elrs-netpack.local` |
-| Language toggle | JP / EN switchable from any page |
-| RSSI display | WiFi signal strength shown in real time |
-| Captive portal | AP mode on first boot or failed WiFi; browser opens automatically |
-| mDNS | Accessible as `elrs-netpack.local` on local network |
-| WiFi settings | SSID / password saved to NVS (flash) |
-| Voltage monitor | LiPo voltage via ADC with configurable divider ratio |
-| Voltage alarm | Buzzer + LED alert when voltage drops below threshold |
-| Buzzer | Double-beep on WiFi connect; short beep on settings save |
-| Notification LED | 7-color auto-cycling LED with PWM brightness control |
-| Fast reconnect | Non-blocking auto-reconnect; retries every 10 s, falls back to captive portal after 60 s |
-| Host mode (v2.2.0) | The netpack runs its own WiFi; the timer and phones join it (below) |
-| USB tethering (v2.2.0) | In host mode, an Android phone on the USB port takes the WiFi to the internet (on / off in the settings) |
-| Update page (v2.2.0) | Write a firmware.bin from the browser (`/update`) |
-| Max TX power | 21 dBm (both WiFi and ESP-NOW sides) |
-| Backpack version | Reports firmware version 10.1 to RotorHazard |
-
-### How the ELRS Backpack bridge sends (elrs-espnow-bridge)
-
-Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its own MAC (goggle backpacks only accept OSD packets from that UID) and sends to the ESP-NOW **broadcast** address, without waiting for an ACK and without retries. Each burst for one pilot (all its OSD packets up to the next `SET_SEND_UID`, or 20 ms of quiet) is sent **3 times in a row** (`SEND_REPEATS`).
-
-- Goggles that are switched off cost nothing (nothing waits for them), so up to 8 pilots with their goggles off don't delay the others.
-- Two goggles bound to the same phrase both show the OSD (no ACK collision).
-- One lost packet is covered by the next copy; longer dropouts by the host's own timed repeats (RotorHazard's vrxc_elrs, or the lap timer).
-- Copies of one packet are at least 3 ms apart: ELRS 2.4 GHz transmitters (one per pilot, right next to the goggles) hop to a new frequency every few ms and about a third of their hops land in ESP-NOW's channel 1, so a later copy meets a different hop.
-- **Listen filter** (custom MSP `0x0F01`, payload = a 6-byte UID, empty to clear): the host (the FPV C5 Lap Timer) gives the race director's UID, and the bridge then passes on only frames *from* that UID (the RD's TX switch). Other bridges' broadcast OSD and pilots' own DVR switches are no longer forwarded. The bridge answers with `0x0F01` payload `1`. Hosts that never send it (RotorHazard / vrxc_elrs) get everything, as before. While the filter is set, the bridge also sniffs the race director's switch in promiscuous mode (v2.12): the TX backpack sends it once per flip to the RD's UID, and during the OSD bursts the bridge's MAC is a pilot's UID, so plain ESP-NOW reception missed it. A frame heard both ways (or retried by the sender) within 500 ms goes to the host once.
-- **Link watch** (custom MSP `0x0F03`, payload `1` on / `0` off, answered with `0x0F03`): the host (the FPV C5 Lap Timer) asks the bridge to listen to channel 1 in promiscuous mode for pilots' TX backpacks with *Backpack > Telemetry = ESPNOW* (ELRS 3.4+). For each UID it hears link statistics from, the bridge reports `0x0F04` (payload: UID 6 bytes, uplink LQ, age in 1/10 s) at once when the radio links or unlinks and then once a second. The watch ends by itself 20 s after the host's last request; hosts that never ask (RotorHazard / vrxc_elrs) see nothing new.
-- **VTX report** (custom MSP `0x0F05`, while the link watch is on): when a pilot's TX sends its VTX settings (Lua *VTX Administrator*; the TX sends them when it links, and the backpack passes them on to the goggles at the same UID as `MSP_SET_VTX_CONFIG`), the bridge reports `0x0F05` (payload: UID 6 bytes, then the first two bytes of the VTX config: band/channel index `(band-1)*8+channel`, or a frequency in MHz).
-- Frames heard over ESP-NOW are queued and written to the UART from `loop()`, never from the WiFi task.
-- Per-packet logging: build with `-DBRIDGE_VERBOSE`.
-
-> **WiFi channel:** ESP-NOW runs on **channel 1** (the ELRS VRx backpack's fixed channel). Put the router the netpack XIAO joins on **channel 6–11** (not 1–4), so its WiFi doesn't share the air with the OSD.
-
----
-
-### Host mode and USB tethering (v2.2.0)
-
-A setup built around the netpack. Its XIAO runs a WiFi of its own (host mode), and the timer and the phones join it. The timer's MSP goes on as before: UART → ELRS Backpack bridge → the goggles' backpack (the bridge is a separate board; its ESP-NOW stays on channel 1).
+**B. Host mode (v2.2.0)** — the netpack XIAO runs its own WiFi; the timer (client mode) and phones join it. A setup built around the netpack. An Android phone on its USB port can take this WiFi to the internet with **USB tethering** ([below](#host-mode-and-usb-tethering)).
 
 ```
  phones (viewers, admin) ──┐
@@ -253,6 +56,144 @@ A setup built around the netpack. Its XIAO runs a WiFi of its own (host mode), a
  (client mode)             ┘     (ch 6-11)              │USB
                                                         └── Android phone (USB tethering) ── internet
 ```
+
+---
+
+## Hardware
+
+| Part | Notes |
+|---|---|
+| Seeed Studio XIAO ESP32-S3 | The netpack XIAO; the external-antenna model is recommended |
+| A board for the ELRS Backpack bridge (one of) | **XIAO ESP32-C3** (small), **XIAO ESP32-C5** (small, v2.2.1), **ESP32 Wrover-E** (any ESP32 dev board with 4 MB+ flash) |
+| 3 jumper wires | TX / RX / GND |
+| USB cables | Writing and power (data-capable) |
+| (optional) passive buzzer, LED, resistors, LiPo | See [Extra hardware](#extra-hardware-optional) |
+| (for USB tethering) USB-C → USB-A OTG adapter | See [USB tethering cabling and power](#usb-tethering-cabling-and-power-important) |
+
+---
+
+## Wiring (netpack XIAO ↔ bridge)
+
+TX and RX **cross**.
+
+| netpack XIAO (S3) | | XIAO ESP32-C3 | XIAO ESP32-C5 | ESP32 Wrover-E |
+|---|---|---|---|---|
+| D0 / GPIO1 (TX) | → | D7 / GPIO20 (RX) | D7 / GPIO12 (RX) | GPIO26 (RX) |
+| D1 / GPIO2 (RX) | ← | D6 / GPIO21 (TX) | D6 / GPIO11 (TX) | GPIO27 (TX) |
+| GND | — | GND | GND | GND |
+
+> Don't join 3V3 / 5V between the boards (GND only). Power each board over USB, or from one supply to each board's 5V / GND.
+
+---
+
+## Writing the firmware
+
+### The easy way: the web flasher (no PlatformIO)
+
+Open **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/)** in **Chrome / Edge** on a PC, plug the device in by USB and press "書き込む" (write).
+
+- Writes the latest release of **ELRS Netpack (XIAO ESP32-S3)** and the **ELRS Backpack bridge** (pick the board: XIAO C3 / XIAO C5 / Wrover-E).
+- "**ファイルを指定して書き込む**" (your own files) writes .bin files (a test build, an older release) or a release zip. Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot.
+- Leave "Erase device" / "erase all" unticked to keep the settings (WiFi and so on).
+- If it can't connect, hold BOOT while plugging the board in (download mode).
+
+### Updating the netpack XIAO from its settings page
+
+netpack settings → "**更新**" (Update, `/update`):
+
+- **Online**: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update). Needs the internet (a router in client mode, or USB tethering in host mode).
+- **A file**: pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin`, or the one in the release zip).
+
+### Release files
+
+[Releases](https://github.com/yanazoo/elrs-netpack/releases) carry:
+
+| File | Contents |
+|---|---|
+| `elrs-netpack-<version>-xiao_esp32s3.zip` | netpack XIAO (bootloader, partitions, firmware) |
+| `elrs-espnow-bridge-<version>-<board>.zip` | bridge (`xiao_esp32c3` / `xiao_esp32c5` / `esp32dev`) |
+| `*-full.bin` | one image, written at `0x0` (esptool-js and others) |
+| `elrs-netpack-xiao_esp32s3-firmware.bin`, `elrs-netpack-version.txt` | for the netpack's online update |
+
+> GitHub Actions builds the web flasher at each release and puts it on GitHub Pages (Settings → Pages → Source must be **GitHub Actions**).
+
+### PlatformIO (from the source)
+
+1. Install **VS Code** and the **PlatformIO IDE** extension.
+2. Clone:
+   ```powershell
+   git clone https://github.com/yanazoo/elrs-netpack
+   cd elrs-netpack
+   ```
+3. Write (`COMx` is the port):
+
+| Device | Command |
+|---|---|
+| netpack XIAO (S3) | `pio run -d elrs-xiao-webui -e xiao_esp32s3 -t upload --upload-port COMx` |
+| bridge (XIAO C3) | `pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload --upload-port COMx` |
+| bridge (XIAO C5) | `pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload --upload-port COMx` |
+| bridge (Wrover-E) | `pio run -d elrs-espnow-bridge -e esp32dev -t upload --upload-port COMx` |
+
+- The netpack XIAO and the XIAO C5 bridge build with pioarduino (Arduino-ESP32 3.3); the first build downloads its packages and takes a while.
+- If writing fails: hold BOOT, press and release RST, release BOOT, then write.
+
+**Boot output (USB serial, 115200)**
+
+netpack XIAO (first boot, no WiFi set):
+```
+[boot] XIAO ESP32-S3 WiFi bridge + Web UI  v2.3.0 (xxxxxxx)
+[wifi] not configured — starting captive portal immediately
+[ap] IP=192.168.4.1
+[web] HTTP server on port 80
+[boot] ready
+```
+
+Bridge:
+```
+[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21)   ← XIAO C3 (XIAO C5: GPIO12 / GPIO11, Wrover-E: GPIO26 / GPIO27)
+[wifi] channel fixed to 1
+[espnow] (re)initialized
+[boot] ready
+```
+
+---
+
+## First setup (netpack XIAO)
+
+No source edits: everything is set on the web pages.
+
+1. After writing, the netpack XIAO runs the setup WiFi **`ELRS-Netpack-Setup`** (password `elrs-netpack`). Join it from a phone or PC and the settings page opens (else `http://192.168.4.1/`).
+2. On "**WiFi**" pick the connection and save.
+   - **Client**: the SSID and password of the network to join (the timer's WiFi or a router); up to 5.
+   - **Host**: the SSID, password and channel of the netpack's own WiFi.
+3. Later, open `http://elrs-netpack.local/` (client mode, or its address), or `http://192.168.4.1/` in host mode.
+
+The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformio.ini` (default 1), fixed at build time.
+
+---
+
+## WiFi settings (`/wifi`)
+
+**State**: the mode and address, where MSP comes from (with "**タイマーを開く**", open the timer), the firmware version; in host mode the devices on the WiFi and the USB tethering state.
+
+**Client mode** (v2.3.0)
+- Up to **5 networks** (SSID, password). Passwords are not shown (blank keeps one); clear an SSID to delete it.
+- **Which one**: **the selected one (●)**, or **automatic** (a scan when joining; the strongest saved network in range).
+- **Address**: automatic (DHCP) or **fixed** (IP address, subnet mask, gateway, DNS; a blank DNS is the gateway). The fixed address is used on every saved network; put it in the timer's "netpack address" for an instant connection.
+- When no network can be joined, the setup WiFi (`ELRS-Netpack-Setup`) comes up and the netpack retries every 15 s. When a joined network drops, it reconnects every 10 s and brings the setup WiFi up after 60 s.
+- The network saved by v2.2.x becomes the first one.
+
+**Host mode**: SSID, password (8-63 characters), channel (6-11). Up to 10 devices, the timer included.
+
+**USB tethering**: on / off (host mode only).
+
+Changing the connection, the host's WiFi or tethering restarts the netpack after saving.
+
+> **WiFi channel**: ESP-NOW is fixed on **channel 1** (the ELRS VRx backpack's). Keep the router the netpack joins, and the host-mode WiFi, on 2.4 GHz **channels 6-11** (1-4 compete with the OSD).
+
+---
+
+## Host mode and USB tethering
 
 **Host mode** (WiFi settings page)
 
@@ -267,152 +208,197 @@ A setup built around the netpack. Its XIAO runs a WiFi of its own (host mode), a
 
 With an Android phone on the XIAO's USB-C and its "USB tethering" on, the devices on the netpack's WiFi (timer, phones) reach the internet through the phone's mobile data (the timer's update check and online update, for instance).
 
-- Tick "**USB テザリング**" (USB tethering) on the WiFi settings page and save (on / off; off by default).
+- Tick "**USB テザリング**" (USB tethering) on the WiFi settings page and save (off by default).
 - On the phone: Settings → Network & internet → Hotspot & tethering → **USB tethering** (names vary). RNDIS (most Android phones) and CDC-NCM / ECM (newer Pixels and others) work. **iPhones do not.**
 - The settings page shows the state (waiting for a phone → turn tethering on → waiting for an address → **up**).
 - The netpack passes the devices' DNS on to the phone's and routes their traffic out through the phone (NAPT).
 - The tethering phone itself should not join the netpack's WiFi (its way out would loop back to the netpack).
 
-**Cabling and power (important)**
+### USB tethering cabling and power (important)
 
 - The XIAO is the USB **host**. Plug a **USB-C (male) → USB-A (female) OTG adapter** into the XIAO and use the phone's charging cable (USB-A → phone). A USB-C ↔ USB-C cable makes the phone the host and does not work.
 - The phone only sees the connection with **5 V on VBUS**. The XIAO's 5V pin is the USB VBUS, so a netpack **powered through its 5V pin** (through a diode, from a 5 V BEC or USB supply) puts 5 V there. With only a LiPo on the BAT pads there is no 5 V, and the phone sees nothing.
 - The phone tries to charge from VBUS (up to about 500 mA). Leave the supply some headroom.
-- While it is on, the USB port is not the XIAO's serial port: **the log goes to D6 (GPIO43, UART0 TX, 115200)**. Update from the **Update** page (`/update`) with a firmware.bin, or hold BOOT while plugging the XIAO into a PC.
+- While it is on, the USB port is not the XIAO's serial port: **the log goes to D6 (GPIO43, UART0 TX, 115200)**. Update from the **Update** page, or hold BOOT while plugging the XIAO into a PC.
 
 ---
 
-### Web UI Pages
+## Connecting FPV C5 Lap Timer and RotorHazard
 
-**`/wifi` — WiFi Settings**
-- State: the mode and address, where MSP comes from (with a link to the timer), and in host mode the devices on the WiFi and the USB tethering state
-- Connection: client (joins a WiFi) / host (the netpack's own WiFi)
-- Client: up to **5 networks** (SSID and password; passwords are not shown, blank keeps one; clear an SSID to delete it) (v2.3.0)
-  - Which one: **the selected one (●)**, or **automatic** (the strongest saved network in range, found by a scan when joining)
-  - **Address**: automatic (DHCP) or **fixed** (IP address, subnet mask, gateway, DNS; a blank DNS is the gateway). The fixed address is used on every saved network
-  - The network saved by v2.2.x becomes the first one
-- Host: SSID, password (8-63 characters; blank keeps it) and channel (6-11)
-- USB tethering: on / off (host mode only)
-- Changing the connection, the host's WiFi or tethering restarts the netpack after saving
+**FPV C5 Lap Timer** (Settings → ELRS OSD)
+- Connection: **"WiFi（elrs-netpack XIAO, TCP）"**
+- netpack address: `auto` (a timer in host mode looks among the devices on its WiFi; in client mode it looks up `elrs-netpack.local`). With a fixed netpack address, that IP can go here directly.
+- "ELRS netpack 接続中" (connected) on the settings screen means it works.
 
-**`/update` — Firmware update** (v2.2.0)
+**RotorHazard** (Raspberry Pi)
+- Install the plugin **[yanazoo/vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)** and set:
+```
+Settings → ELRS Backpack General
+  Backpack connection type → SOCKET
+  ELRS Netpack address     → elrs-netpack.local (or the netpack's IP address)
+  Port                     → 8080
+```
+
+---
+
+## Extra hardware (optional)
+
+| Part | Notes |
+|---|---|
+| Passive buzzer | GPIO4 (+) / GPIO6 (−) |
+| 7-color auto-cycling LED | GPIO9 (D10) + **100 Ω resistor** in series |
+| 2 × 100 kΩ resistors | LiPo voltage divider |
+| LiPo battery | 1S recommended (shared by the netpack XIAO and the bridge) |
+
+| XIAO GPIO | Pin | Connects to |
+|---|---|---|
+| GPIO3 | D2 / A0 | Divider midpoint (LiPo+ → R1 100kΩ → GPIO3 → R2 100kΩ → GND) |
+| GPIO4 | D3 | Buzzer + |
+| GPIO6 | D5 | Buzzer − |
+| GPIO9 | D10 | LED anode (+ 100 Ω → GND) |
+| GPIO21 | — | Built-in LED (active-LOW, on board) |
+| GPIO43 | D6 | Log out (UART0 TX, while USB tethering is on) |
+
+> **Important:** always put a **100 Ω** resistor in series with the notification LED (to protect GPIO9).
+
+---
+
+## Features (netpack XIAO: elrs-xiao-webui)
+
+| Feature | Description |
+|---|---|
+| TCP MSP bridge | TCP 8080 ⇄ UART; a new connection replaces the old one (a timer that restarted or rejoined) |
+| Web settings | WiFi, voltage and update pages; Japanese / English |
+| WiFi (client) | 5 networks (selected / automatic), fixed address, setup WiFi (captive portal) when none can be joined |
+| WiFi (host) | The netpack's own WiFi (SSID, password, ch 6-11), up to 10 devices, DNS relay |
+| USB tethering | In host mode, to the internet through an Android phone (RNDIS / NCM / ECM, NAPT) |
+| mDNS | `elrs-netpack.local` (web and TCP) |
+| Firmware update | Online (GitHub release) or from a file |
+| Voltage monitor and alarm | Shows the LiPo voltage; buzzer and LED below the threshold |
+| Buzzer / LED notices | 2 beeps on WiFi joined, 1 on settings saved, long beeps when TCP drops |
+| Max TX power | 21 dBm on WiFi and ESP-NOW |
+| Backpack version | Reports version 10.1 to the connecting host |
+
+### How the ELRS Backpack bridge sends (elrs-espnow-bridge)
+
+It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID as its own MAC (a goggle backpack only shows OSD packets from that UID) and sends ESP-NOW **broadcasts**: no waiting for an ACK, no retries.
+
+- One pilot's screen update (until the next `SET_SEND_UID`, or 20 ms without sends) goes out **3 times** in a row (`SEND_REPEATS`).
+- Copies of the same packet are at least **3 ms** apart. Each pilot's ELRS 2.4 GHz radio hops every few ms and about a third of its hops land in channel 1, so a slightly later copy meets a different hop and gets through more often.
+- Goggles that are switched off, however many, don't delay anyone else's OSD. Two goggles on the same bind phrase show the same thing.
+- Longer dropouts are covered by the sender's spaced resends (RotorHazard's vrxc_elrs, the lap timer).
+- **Receive filter** (custom MSP `0x0F01`, payload = a 6-byte UID, empty to clear): when the host (FPV C5 Lap Timer) names the race director's UID, the bridge passes on only frames **from** that UID (the director's radio switch), not other bridges' broadcast OSD or pilots' own DVR switches. The bridge answers `0x0F01` (payload `1`). Hosts that don't send it (RotorHazard's vrxc_elrs) get everything as before. While a filter is set, the bridge also listens in promiscuous mode for the director's switch (v2.12); the same frame heard twice within 500 ms is passed on once.
+- **Link watch** (custom MSP `0x0F03`, payload `1` start / `0` stop, answered with `0x0F03`): asked by the host (FPV C5 Lap Timer), the bridge hears all ESP-NOW on channel 1 and reads the link reports pilots' radio backpacks send (ELRS 3.4+, *Backpack → Telemetry = ESPNOW*). Per UID it reports `0x0F04` (payload: UID 6 bytes, uplink LQ, age in 0.1 s), at once on link up / down and every second otherwise. It stops by itself 20 s after the host's last request.
+- **VTX reports** (custom MSP `0x0F05`, during the link watch): when a pilot's radio sends its VTX setting (Lua *VTX Administrator*), the bridge reports `0x0F05` (payload: UID 6 bytes, the VTX setting's first 2 bytes = band/channel index `(band-1)*8+channel`, or a frequency in MHz).
+- The XIAO C5 bridge stays on 2.4 GHz (no 5 GHz).
+- Frames received over ESP-NOW are queued and written to UART from `loop()` (the WiFi task never waits on the UART).
+- Per-packet logs only with `-DBRIDGE_VERBOSE`.
+
+---
+
+## Web UI pages
+
+**`/wifi` — WiFi**: see [above](#wifi-settings-wifi).
+
+**`/update` — Firmware update**
 - The firmware's version (release and build)
 - Online: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update) when there is a newer release; it is written and the netpack restarts
 - A file: pick the firmware.bin of `elrs-xiao-webui`; it is written and the netpack restarts. Settings are kept
 
-**`/voltage` — Voltage Monitor**
-- Displays current LiPo voltage
-- Divider ratio: set to `2.0` for equal resistors (100 kΩ + 100 kΩ)
-- Alarm threshold: default 3.5 V (1S LiPo low-voltage warning)
-- Enable / disable voltage alarm independently
-- Enable / disable buzzer independently
-- Enable / disable notification LED independently
+**`/voltage` — Voltage monitor**
+- Shows the current LiPo voltage
+- Divider ratio: `2.0` for equal resistors (100 kΩ + 100 kΩ)
+- Alarm threshold: default 3.5 V (1S LiPo low voltage)
+- Voltage alarm, buzzer and notification LED on / off each
 
 ---
 
-### LED Behavior (GPIO9 — 7-color auto-cycling)
+## LEDs
+
+**Notification LED (GPIO9 — 7-color auto-cycling)**
 
 | State | Pattern |
 |---|---|
-| AP mode (needs configuration) | Slow blink 500 ms |
-| WiFi disconnected | Rapid blink 80 ms (until reconnected) |
-| Voltage alarm active | Solid on |
-| STA connected or host mode (normal) | Heartbeat double-pulse, peak brightness ~4%, 2 s period |
-| LED disabled (setting) | Off |
+| Setup WiFi (waiting for settings) | Slow blink, 500 ms |
+| WiFi lost (client mode) | Fast blink, 80 ms (until reconnected) |
+| TCP dropped (after it was up) | Medium blink, 300 ms |
+| Voltage alarm | On |
+| Normal (client joined, or host mode) | Heartbeat, 2 pulses / 2 s (peak ~4%) |
+| LED disabled | Off |
 
-### Built-in LED Behavior (GPIO21 — active-LOW)
+**Built-in LED (GPIO21 — active-LOW)**
 
 | State | Pattern |
 |---|---|
-| Connecting to WiFi | On (solid) |
-| AP mode | Blink 200 ms |
-| STA connected | Off |
+| Joining WiFi | On |
+| Setup WiFi | Blink 200 ms |
+| Joined, or host mode | Off |
 
 ---
 
-### NVS Stored Settings
+## Stored settings (NVS)
 
-All settings survive power cycles (stored in ESP32 flash via Preferences).
+Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an erase in the web flasher clears them.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `netMode` | UChar | 0 | Connection (0 = client, 1 = host) |
 | `ss0`–`ss4` / `sp0`–`sp4` | String | (empty) | Client networks 1-5: SSID / password (v2.3.0) |
 | `nets` | Bool | false | The 5 networks are saved (false: `ssid` / `wifiPass` become the first) |
 | `staSel` | UChar | 0 | The selected network (0-4) |
 | `staAuto` | Bool | false | Automatic (the strongest saved network) |
 | `ipFix` | Bool | false | Fixed address |
 | `ip` / `mask` / `gw` / `dns` | UInt | 0 / 255.255.255.0 / 0 / 0 | The fixed IP address, subnet mask, gateway, DNS |
-| `ssid` | String | `ELRS-Netpack-Setup` | WiFi SSID (up to v2.2.x) |
-| `wifiPass` | String | `elrs-netpack` | WiFi password (up to v2.2.x) |
-| `configured` | Bool | false | Skip STA on first boot if false |
-| `vbatRatio` | Float | 2.0 | Voltage divider ratio |
-| `alarmV` | Float | 3.5 | Alarm threshold (V) |
-| `vbatAlarmEn` | Bool | false | Voltage alarm enabled |
-| `buzzerEn` | Bool | true | Buzzer enabled |
-| `ledEn` | Bool | true | Notification LED enabled |
-| `langJa` | Bool | true | Language (true = Japanese) |
-| `netMode` | UChar | 0 | Connection (0 = client, 1 = host) |
+| `configured` | Bool | false | At least one network is saved |
+| `ssid` / `wifiPass` | String | — | The network of v2.2.x and before (moved to the first) |
 | `hSsid` | String | `ELRS-Netpack` | Host mode SSID |
 | `hPass` | String | `elrs-netpack` | Host mode password |
 | `hCh` | UChar | 6 | Host mode channel (6-11) |
 | `tether` | Bool | false | USB tethering (host mode only) |
+| `vbatRatio` | Float | 2.0 | Voltage divider ratio |
+| `alarmV` | Float | 3.5 | Alarm threshold (V) |
+| `vbatAlarmEn` | Bool | false | Voltage alarm on |
+| `buzzerEn` | Bool | true | Buzzer on |
+| `ledEn` | Bool | true | Notification LED on |
+| `langJa` | Bool | true | Language (true = Japanese) |
 
 ---
 
-### Default AP Credentials (elrs-xiao-webui)
+## Default WiFi (public defaults; changing them is recommended)
 
-| | Value |
-|---|---|
-| SSID | `ELRS-Netpack-Setup` |
-| Password | `elrs-netpack` |
-| IP | `192.168.4.1` |
-| Settings URL | `http://192.168.4.1/` |
-
----
-
-## RotorHazard Plugin
-
-Install the following plugin on your Raspberry Pi to enable ELRS backpack communication from RotorHazard:
-
-**[yanazoo/vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)**
-
-Follow the installation instructions in that repository, then proceed to the connection settings below.
-
----
-
-## RotorHazard Connection Settings
-
-```
-Settings → ELRS Backpack General
-  Backpack connection type → SOCKET
-  ELRS Netpack address     → elrs-netpack.local
-                             (or XIAO's IP address)
-  Port                     → 8080
-```
+| | Setup WiFi (client mode, not joined) | Host mode WiFi |
+|---|---|---|
+| SSID | `ELRS-Netpack-Setup` | `ELRS-Netpack` (editable) |
+| Password | `elrs-netpack` | `elrs-netpack` (editable) |
+| IP address | `192.168.4.1` | `192.168.4.1` |
+| Settings URL | `http://192.168.4.1/` | `http://192.168.4.1/` |
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Fix |
+| Symptom | What to do |
 |---|---|
-| WiFi AUTH_EXPIRE loop | Wrong password → re-enter it via the captive portal (AP mode) |
-| `elrs-netpack.local` not found | Check XIAO and RPi are on same network; try IP directly |
-| ESP-NOW send error | Confirm goggles backpack is powered on |
-| OSD not appearing | Verify ESP-NOW channel matches backpack (default ch 1) |
-| PlatformIO board not found | Run `pio platform update espressif32` |
-| `No module named intelhex` | Run `C:\Users\<you>\.platformio\penv\Scripts\python.exe -m pip install intelhex` |
-| Flash failed | Enter BOOT mode (see above) |
+| The netpack doesn't join the WiFi | Join the setup WiFi (`ELRS-Netpack-Setup`) and check the SSID and password; the router must offer 2.4 GHz (5 GHz only won't do) |
+| `elrs-netpack.local` not found | Same network? Fix the netpack's address and use that IP |
+| The timer doesn't show "ELRS netpack 接続中" | The timer's connection ("WiFi（elrs-netpack XIAO, TCP）"), its netpack address (`auto` or the IP), "MSP from" on the netpack's page |
+| No OSD in the goggles | The bridge wiring (TX/RX crossed, GND), the bridge's boot log, the bind phrase matching the goggles, the ESP-NOW channel (1) |
+| OSD drops or lags | Router / host WiFi on ch 6-11; the bridge's antenna (fit the XIAO C3 / C5 antenna) |
+| USB tethering stays at "waiting for a phone" | The OTG adapter on the XIAO side; power through the 5V pin (VBUS needs 5 V) |
+| USB tethering stays at "turn tethering on" | Turn the phone's USB tethering on; iPhones don't work |
+| Can't write over USB while tethering | Use the Update page, or hold BOOT while plugging into a PC |
+| A PlatformIO build fails | The first build downloads packages (takes a while); try `pio pkg update`. On Windows, `No module named intelhex`: `C:\Users\<user>\.platformio\penv\Scripts\python.exe -m pip install intelhex` |
 
 ---
 
-## Credits & Fork Info
+## Credits & fork info
 
-This project is a fork of the **ELRS Netpack** concept originally designed for the Waveshare ESP32-S3 Ethernet board.
+This project is a fork of the **ELRS Netpack** concept designed for the Waveshare ESP32-S3 Ethernet board.
 
-- Original ELRS Backpack protocol: [ExpressLRS/backpack](https://github.com/ExpressLRS/backpack)
+- Original ELRS backpack protocol: [ExpressLRS/backpack](https://github.com/ExpressLRS/backpack)
 - RotorHazard: [RotorHazard/RotorHazard](https://github.com/RotorHazard/RotorHazard)
+- FPV C5 Lap Timer: [yanazoo/FPV-C5-Lap-Timer](https://github.com/yanazoo/FPV-C5-Lap-Timer)
 - Seeed Studio XIAO ESP32-S3 docs: [wiki.seeedstudio.com](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - This fork: [yanazoo/elrs-netpack](https://github.com/yanazoo/elrs-netpack)
 
-The dual-MCU ELRS Backpack bridge approach was developed to resolve the hardware limitation of sharing a single 2.4 GHz radio between WiFi STA and ESP-NOW on the ESP32-S3.
+The two-board setup (netpack XIAO + ELRS Backpack bridge) was made to get around an ESP32 sharing its 2.4 GHz radio between WiFi and ESP-NOW.
