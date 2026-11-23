@@ -1,145 +1,146 @@
-# ELRS Netpack — from WiFi (TCP) to the ELRS backpacks
+# ELRS-NETpack — WiFi（TCP）から ELRS バックパックへ
 
-English | [日本語](README.ja.md)
+🌐 **日本語** | [English](README.en.md)
 
 > [!IMPORTANT]
-> This fork uses **two ESP32 boards** to build a **TCP → WiFi → ESP-NOW** backpack link. It is **not compatible** with the original Waveshare ESP32-S3 Ethernet board.
+> このフォークは **ESP32 を 2 台使用**して **TCP → WiFi → ESP-NOW** のバックパック通信システムを構築します。元の Waveshare ESP32-S3 Ethernet ボードとは**互換性がありません**。
 
 > [!NOTE]
-> This project is not affiliated with the ExpressLRS organization.
+> このプロジェクトは ExpressLRS organization と公式な関係はありません。
 
 ---
 
-## Overview
+## 概要
 
-A lap timer (**FPV C5 Lap Timer** or **RotorHazard**) sends MSP packets (the goggles' OSD, race signals). This system takes them over WiFi (TCP) and delivers them to the **ELRS VRx backpacks** (FPV goggles) over ESP-NOW. It is built from two boards.
+ラップタイマー（**FPV C5 Lap Timer** や **RotorHazard**）が送る MSP パケット（ゴーグルの OSD・レースの合図）を、WiFi（TCP）で受け取り、**ELRS VRx バックパック**（FPV ゴーグル）へ ESP-NOW で届けるシステムです。2 台のボードで作ります。
 
-| Board | Firmware | Role |
+| ボード | ファームウェア | 役割 |
 |---|---|---|
-| **netpack XIAO** (Seeed XIAO ESP32-S3) | `elrs-xiao-webui/` | WiFi, TCP server (port 8080), web settings; passes the MSP to the bridge over UART |
-| **ELRS Backpack bridge** (XIAO ESP32-C3 / XIAO ESP32-C5 / ESP32 Wrover-E) | `elrs-espnow-bridge/` | ESP-NOW (2.4 GHz, ch 1) to and from the goggles' and radios' backpacks |
+| **netpack の XIAO**（Seeed XIAO ESP32-S3） | `elrs-xiao-webui/` | WiFi・TCP サーバー（ポート 8080）・Web 設定画面。受け取った MSP を UART でブリッジへ |
+| **ELRSバックパック-ブリッジ**（**XIAO ESP32-C3**。XIAO ESP32-C5・ESP32 Wrover-E でも可） | `elrs-espnow-bridge/` | ESP-NOW（2.4 GHz、ch 1）でゴーグル・送信機のバックパックと送受信 |
 
 ```
  FPV C5 Lap Timer / RotorHazard
-        │  WiFi, TCP 8080
+        │  WiFi・TCP 8080
         ▼
 ┌──────────────────────────┐
-│ netpack XIAO (S3)          │  elrs-xiao-webui/
-│ WiFi (client / host)       │  TCP ⇄ UART, web settings, mDNS
+│ netpack の XIAO（S3）       │  elrs-xiao-webui/
+│ WiFi（クライアント／ホスト） │  TCP ⇄ UART、Web 設定画面、mDNS
 └────────────┬─────────────┘
-             │  UART 115200 baud (TX / RX / GND)
+             │  UART 115200 baud（TX / RX / GND）
              ▼
 ┌──────────────────────────┐
-│ ELRS Backpack bridge       │  elrs-espnow-bridge/
-│ XIAO C3 / XIAO C5 / Wrover-E │
+│ ELRSバックパック-ブリッジ    │  elrs-espnow-bridge/
+│ XIAO C3（または C5 / Wrover-E）│
 └────────────┬─────────────┘
-             │  ESP-NOW (2.4 GHz, ch 1)
+             │  ESP-NOW（2.4 GHz、ch 1）
              ▼
-   ELRS VRx backpacks (goggles), radios' backpacks
+   ELRS VRx バックパック（ゴーグル）・送信機のバックパック
 ```
 
-**Why two boards?** An ESP32 has one 2.4 GHz radio. WiFi (a router or FPV C5 Lap Timer's WiFi) and ESP-NOW (fixed on ch 1) on one board don't share a channel and packets get lost. Splitting the roles over two boards joined by UART solves it.
+**なぜ 2 台必要か？** ESP32 の 2.4 GHz 無線は 1 つだけです。WiFi（ルーターや FPV C5 Lap Timer の WiFi）と ESP-NOW（ch 1 固定）を 1 台で同時に使うと、チャンネルが合わずパケットが落ちます。役割を 2 台に分けて UART でつなぐことで、この問題を解決しています。
 
-> FPV C5 Lap Timer can also take the bridge **wired straight to FPV C5 Lap Timer over UART** (no netpack XIAO; see FPV C5 Lap Timer's [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)). The netpack is for a bridge that can't sit next to FPV C5 Lap Timer, and for RotorHazard.
+> FPV C5 Lap Timer では、ブリッジを **本体に UART で直結**して使うこともできます（netpack の XIAO は不要。FPV C5 Lap Timer の [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)）。netpack は、ブリッジを FPV C5 Lap Timer の近くに置けない場合や、RotorHazard で使う場合の構成です。
 
 ---
 
-## Two ways to run it
+## 使い方の 2 つの形
 
-**A. Client mode (default)** — the netpack XIAO joins FPV C5 Lap Timer's WiFi (FPV C5 Lap Timer in host mode) or the venue's router. FPV C5 Lap Timer (or RotorHazard) finds the netpack as `elrs-netpack.local` and connects to TCP 8080.
+**A. クライアントモード（初期値）** — netpack の XIAO が、FPV C5 Lap Timer の WiFi（ホストモードの FPV C5 Lap Timer）や会場のルーターに接続します。FPV C5 Lap Timer（または RotorHazard）は netpack を `elrs-netpack.local` で見つけて TCP 8080 につなぎます。
 
-**B. Host mode (v2.2.0)** — the netpack XIAO runs its own WiFi; FPV C5 Lap Timer (client mode) and phones join it. A setup built around the netpack. An Android phone on its USB port can take this WiFi to the internet with **USB tethering** ([below](#host-mode-and-usb-tethering)).
+**B. ホストモード（v2.2.0）** — netpack の XIAO が自分の WiFi を出し、FPV C5 Lap Timer（クライアントモード）とスマホがそこに接続します。netpack を中心にした構成です。USB につないだ Android スマホの**USB テザリング**で、この WiFi からインターネットへ出ることもできます（[下記](#ホストモードと-usb-テザリング)）。
 
 ```
- phones (viewers, admin) ──┐
- FPV C5 Lap Timer ─────────┼── WiFi "ELRS-NETpack" ── netpack XIAO ──UART── ELRS Backpack bridge ── goggles
- (client mode)             ┘     (ch 6-11)              │USB
-                                                        └── Android phone (USB tethering) ── internet
+ スマホ（観戦・管理）──┐
+ FPV C5 Lap Timer ────┼── WiFi「ELRS-NETpack」── netpack XIAO ──UART── ELRSバックパック-ブリッジ ── ゴーグル
+ （クライアントモード）  ┘     （ch 6〜11）          │USB
+                                                    └── Android スマホ（USB テザリング）── インターネット
 ```
 
 ---
 
-## Hardware
+## 必要なハードウェア
 
-| Part | Notes |
+| 部品 | 備考 |
 |---|---|
-| Seeed Studio XIAO ESP32-S3 | The netpack XIAO; the external-antenna model is recommended |
-| A board for the ELRS Backpack bridge (one of) | **XIAO ESP32-C3** (small), **XIAO ESP32-C5** (small, v2.2.1), **ESP32 Wrover-E** (any ESP32 dev board with 4 MB+ flash) |
-| 3 jumper wires | TX / RX / GND |
-| USB cables | Writing and power (data-capable) |
-| (optional) passive buzzer, LED, resistors, LiPo | See [Extra hardware](#extra-hardware-optional) |
-| (for USB tethering) USB-C → USB-A OTG adapter | See [USB tethering cabling and power](#usb-tethering-cabling-and-power-important) |
+| Seeed Studio XIAO ESP32-S3 | netpack の XIAO。外部アンテナのモデル推奨 |
+| ELRSバックパック-ブリッジ用のボード | **Seeed Studio XIAO ESP32-C3**（おすすめ。小型） |
+| （代わりに）XIAO ESP32-C5 または ESP32 Wrover-E | XIAO ESP32-C5（小型、v2.2.1）、ESP32 Wrover-E（4 MB 以上の Flash の ESP32 開発ボードなら可） |
+| ジャンパーワイヤー 3 本 | TX / RX / GND |
+| USB ケーブル | 書き込み・給電用（データ転送対応） |
+| （任意）パッシブブザー・LED・抵抗・LiPo | [追加ハードウェア](#追加ハードウェア任意)を参照 |
+| （USB テザリングを使う場合）USB-C → USB-A の OTG 変換アダプター | [USB テザリングの配線・電源](#usb-テザリングの配線電源大事)を参照 |
 
 ---
 
-## Wiring (netpack XIAO ↔ bridge)
+## 配線（netpack の XIAO ↔ ブリッジ）
 
-TX and RX **cross**.
+TX と RX は**交差**させます。
 
-| netpack XIAO (S3) | | XIAO ESP32-C3 | XIAO ESP32-C5 | ESP32 Wrover-E |
+| netpack の XIAO（S3） | 向き | **XIAO ESP32-C3**（おすすめ） | XIAO ESP32-C5（代わりに） | ESP32 Wrover-E（代わりに） |
 |---|---|---|---|---|
-| D0 / GPIO1 (TX) | → | D7 / GPIO20 (RX) | D7 / GPIO12 (RX) | GPIO26 (RX) |
-| D1 / GPIO2 (RX) | ← | D6 / GPIO21 (TX) | D6 / GPIO11 (TX) | GPIO27 (TX) |
+| D0 / GPIO1（TX） | → | D7 / GPIO20（RX） | D7 / GPIO12（RX） | GPIO26（RX） |
+| D1 / GPIO2（RX） | ← | D6 / GPIO21（TX） | D6 / GPIO11（TX） | GPIO27（TX） |
 | GND | — | GND | GND | GND |
 
-> Don't join 3V3 / 5V between the boards (GND only). Power each board over USB, or from one supply to each board's 5V / GND.
+> 3V3 / 5V はボード間で直接つながないでください（つなぐのは GND だけ）。各ボードを USB などで給電するか、同じ電源から各ボードの 5V / GND へ配線します。
 
 ---
 
-## Writing the firmware
+## 書き込み
 
-### The easy way: the web flasher (no PlatformIO)
+### かんたんな方法：Web 書き込みページ（PlatformIO 不要）
 
-Open **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/)** in **Chrome / Edge** on a PC, plug the device in by USB and press "書き込む" (write).
+PC の **Chrome / Edge** で **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/)** を開き、機器を USB でつないで「書き込む」を押します。
 
-- Writes the latest release of **ELRS Netpack (XIAO ESP32-S3)** and the **ELRS Backpack bridge** (pick the board: XIAO C3 / XIAO C5 / Wrover-E).
-- "**ファイルを指定して書き込む**" (your own files) writes .bin files (a test build, an older release) or a release zip. Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot.
-- Leave "Erase device" / "erase all" unticked to keep the settings (WiFi and so on).
-- If it can't connect, hold BOOT while plugging the board in (download mode).
+- **ELRS-NETpack（XIAO ESP32-S3）** と **ELRSバックパック-ブリッジ**（ハード：XIAO C3 / XIAO C5 / Wrover-E を選択）の最新リリースを書き込めます。
+- 「**ファイルを指定して書き込む**」では、手元の .bin（試験版・前の版）やリリースの zip を選んで書き込めます。アドレスはファイル名から自動で入ります（変更可）。firmware.bin には「最初のアプリから起動」（otadata）が自動で付きます。
+- 「デバイスを消去する」「すべて消去」にチェックを入れなければ、WiFi などの設定は残ります。
+- つながらないときは、BOOT ボタンを押したまま USB を挿し直すと書き込みモードになります。
 
-### Updating the netpack XIAO from its settings page
+### netpack の XIAO の更新（設定ページから）
 
-netpack settings → "**更新**" (Update, `/update`):
+netpack の設定ページ →「**更新**」（`/update`）：
 
-- **Online**: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update). Needs the internet (a router in client mode, or USB tethering in host mode).
-- **A file**: pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin`, or the one in the release zip).
+- **ネットから更新**：「🔍 最新版を確認」→「⬇️ 〜に更新」。インターネットが必要です（クライアントモードのルーター、またはホストモードの USB テザリング）。
+- **ファイルから**：firmware.bin（`elrs-netpack-xiao_esp32s3-firmware.bin`、またはリリース zip の中）を選んで「ファイルで更新」。
 
-### Release files
+### リリースのファイル
 
-[Releases](https://github.com/yanazoo/elrs-netpack/releases) carry:
+[Releases](https://github.com/yanazoo/elrs-netpack/releases) に次のファイルが付きます。
 
-| File | Contents |
+| ファイル | 中身 |
 |---|---|
-| `elrs-netpack-<version>-xiao_esp32s3.zip` | netpack XIAO (bootloader, partitions, firmware) |
-| `elrs-espnow-bridge-<version>-<board>.zip` | bridge (`xiao_esp32c3` / `xiao_esp32c5` / `esp32dev`) |
-| `*-full.bin` | one image, written at `0x0` (esptool-js and others) |
-| `elrs-netpack-xiao_esp32s3-firmware.bin`, `elrs-netpack-version.txt` | for the netpack's online update |
+| `elrs-netpack-<版>-xiao_esp32s3.zip` | netpack の XIAO（bootloader・partitions・firmware） |
+| `elrs-espnow-bridge-<版>-<ボード>.zip` | ブリッジ（`xiao_esp32c3` / `xiao_esp32c5` / `esp32dev`） |
+| `*-full.bin` | 1 つにまとめたもの（アドレス `0x0` に書き込む。esptool-js など） |
+| `elrs-netpack-xiao_esp32s3-firmware.bin`・`elrs-netpack-version.txt` | netpack の「ネットから更新」用 |
 
-> GitHub Actions builds the web flasher at each release and puts it on GitHub Pages (Settings → Pages → Source must be **GitHub Actions**).
+> Web 書き込みページは、リリースのたびに GitHub Actions が作って GitHub Pages に置きます（リポジトリの Settings → Pages → Source を **GitHub Actions** にしておく必要があります）。
 
-### PlatformIO (from the source)
+### PlatformIO で書き込む（ソースから）
 
-1. Install **VS Code** and the **PlatformIO IDE** extension.
-2. Clone:
+1. **VS Code** と **PlatformIO IDE 拡張機能**をインストールします。
+2. リポジトリをクローン：
    ```powershell
    git clone https://github.com/yanazoo/elrs-netpack
    cd elrs-netpack
    ```
-3. Write (`COMx` is the port):
+3. 書き込み（`COMx` はポート番号）：
 
-| Device | Command |
+| 機器 | コマンド |
 |---|---|
-| netpack XIAO (S3) | `pio run -d elrs-xiao-webui -e xiao_esp32s3 -t upload --upload-port COMx` |
-| bridge (XIAO C3) | `pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload --upload-port COMx` |
-| bridge (XIAO C5) | `pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload --upload-port COMx` |
-| bridge (Wrover-E) | `pio run -d elrs-espnow-bridge -e esp32dev -t upload --upload-port COMx` |
+| netpack の XIAO（S3） | `pio run -d elrs-xiao-webui -e xiao_esp32s3 -t upload --upload-port COMx` |
+| ブリッジ（XIAO C3、おすすめ） | `pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload --upload-port COMx` |
+| ブリッジ（XIAO C5、代わりに使う場合） | `pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload --upload-port COMx` |
+| ブリッジ（Wrover-E、代わりに使う場合） | `pio run -d elrs-espnow-bridge -e esp32dev -t upload --upload-port COMx` |
 
-- The netpack XIAO and the XIAO C5 bridge build with pioarduino (Arduino-ESP32 3.3); the first build downloads its packages and takes a while.
-- If writing fails: hold BOOT, press and release RST, release BOOT, then write.
+- netpack の XIAO と XIAO C5 のブリッジは pioarduino（Arduino-ESP32 3.3）でビルドします。初回はパッケージのダウンロードに時間がかかります。
+- 書き込めないときは、BOOT ボタンを押したまま RST を押して離し、BOOT を離してから書き込みます。
 
-**Boot output (USB serial, 115200)**
+**起動時のシリアル出力（USB、115200）**
 
-netpack XIAO (first boot, no WiFi set):
+netpack の XIAO（初回起動・WiFi 未設定時）：
 ```
 [boot] XIAO ESP32-S3 WiFi bridge + Web UI  v2.3.0 (xxxxxxx)
 [wifi] not configured — starting captive portal immediately
@@ -148,9 +149,9 @@ netpack XIAO (first boot, no WiFi set):
 [boot] ready
 ```
 
-Bridge:
+ブリッジ：
 ```
-[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21)   ← XIAO C3 (XIAO C5: GPIO12 / GPIO11, Wrover-E: GPIO26 / GPIO27)
+[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21)   ← XIAO C3（XIAO C5 は GPIO12 / GPIO11、Wrover-E は GPIO26 / GPIO27）
 [wifi] channel fixed to 1
 [espnow] (re)initialized
 [boot] ready
@@ -158,273 +159,273 @@ Bridge:
 
 ---
 
-## First setup (netpack XIAO)
+## 初期設定（netpack の XIAO）
 
-No source edits: everything is set on the web pages.
+ソースの編集は不要です。設定はすべて Web 画面で行います。
 
-1. After writing, the netpack XIAO runs the setup WiFi **`ELRS-NETpack-Setup`** (password `elrs-netpack`). Join it from a phone or PC and the settings page opens (else `http://192.168.4.1/`). Log in with the admin password (default `admin`).
-2. On "**WiFi**" pick the connection and save.
-   - **Client**: the SSID and password of the network to join (FPV C5 Lap Timer's WiFi or a router); up to 5.
-   - **Host**: the SSID, password and channel of the netpack's own WiFi.
-3. Later, open `http://elrs-netpack.local/` (client mode, or its address), or `http://192.168.4.1/` in host mode.
+1. 書き込み後、netpack の XIAO は設定用の WiFi **`ELRS-NETpack-Setup`**（パスワード `elrs-netpack`）を出します。スマホや PC で接続すると設定ページが開きます（開かないときは `http://192.168.4.1/`）。管理者パスワード（初期値 `admin`）でログインします。
+2. 「**WiFi 設定**」で接続方式を選んで保存します。
+   - **クライアント**：接続先（FPV C5 Lap Timer の WiFi やルーター）の SSID とパスワード。5 つまで登録できます。
+   - **ホスト**：netpack が出す WiFi の SSID・パスワード・チャンネル。
+3. つながったあとは `http://elrs-netpack.local/`（クライアントモード。またはそのアドレス）、ホストモードでは `http://192.168.4.1/` で設定ページを開けます。
 
-The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformio.ini` (default 1), fixed at build time.
-
----
-
-## WiFi settings (`/wifi`)
-
-**State**: at the top, a link to **FPV C5 Lap Timer**'s screen (the MSP peer, or `fpv-c5-lt.local` looked up on the same WiFi; "not found" otherwise); then the mode and address, the MSP connection, the firmware version; in host mode the devices on the WiFi and the USB tethering state.
-
-**Client mode** (v2.3.0)
-- Up to **5 networks** (SSID, password). Passwords are not shown (blank keeps one); clear an SSID to delete it.
-- **Which one**: **the selected one (●)**, or **automatic** (a scan when joining; the strongest saved network in range).
-- **Address**: automatic (DHCP) or **fixed** (IP address, subnet mask, gateway, DNS; a blank DNS is the gateway). The fixed address is used on every saved network; put it in FPV C5 Lap Timer's "netpack address" for an instant connection.
-- When no network can be joined, the setup WiFi (`ELRS-NETpack-Setup`) comes up and the netpack retries every 15 s. When a joined network drops, it reconnects every 10 s and brings the setup WiFi up after 60 s.
-- The network saved by v2.2.x becomes the first one.
-
-**Host mode**: SSID, password (8-63 characters), channel (6-11), **phones / PCs** (1-9, default 5) (v2.3.0).
-- A limit for use as a bridge: **one place is always kept free for FPV C5 Lap Timer**; phones / PCs up to the number set (default 5: settings, a look at FPV C5 Lap Timer).
-- One more is sent off and kept out for 30 s. FPV C5 Lap Timer is known as the device its OSD connection (TCP) came from (once seen, it can always join).
-- Raise it for a crowd watching on the netpack's WiFi (10 devices in all at most).
-
-**USB tethering**: on / off (host mode only).
-
-**Mode switch** (v2.3.0): host or client mode chosen by a switch on the box.
-- On the settings page, tick "**物理スイッチを使う**" (use a mode switch); unticked by default.
-- Wire it between **D4 (GPIO5) and GND** (internal pull-up, no resistor). **ON (connected) = host mode, OFF = client mode.**
-- It is read **at start-up only**: after switching, power-cycle (or restart). Switching while running does nothing.
-- While a switch is set, it decides the mode over the page's choice (kept for when the switch is set to none). The page shows the switch and the mode at this start-up.
-
-Changing the connection, the host's WiFi or tethering restarts the netpack after saving.
-
-> **WiFi channel**: ESP-NOW is fixed on **channel 1** (the ELRS VRx backpack's). Keep the router the netpack joins, and the host-mode WiFi, on 2.4 GHz **channels 6-11** (1-4 compete with the OSD).
+ブリッジは設定不要です。ESP-NOW のチャンネルは `platformio.ini` の `ESPNOW_CHANNEL`（初期値 1）でビルド時に決まります。
 
 ---
 
-## Host mode and USB tethering
+## WiFi の設定（`/wifi`）
 
-**Host mode** (WiFi settings page)
+**状態**：いちばん上に「**FPV C5 Lap Timer**」の画面へのリンク（MSP の接続元、または同じ WiFi の `fpv-c5-lt.local` を自動で探します。見つからなければ「見つかりません」）。そのほか、今のモード・アドレス、MSP の接続状態、ファームの版。ホストモードでは、つながっている機器と USB テザリングの状態。
 
-1. Under "接続方式" (connection) pick **Host**, enter the host SSID, password (8-63 characters) and channel (6-11), and save. The netpack restarts with that WiFi (defaults: SSID `ELRS-NETpack`, password `elrs-netpack`, ch 6).
-2. The settings page is at `http://192.168.4.1/` (or `http://elrs-netpack.local/`).
-3. Put FPV C5 Lap Timer in **client mode** with this SSID and password. Leave its netpack address at `auto`: it finds the netpack as `elrs-netpack.local`.
-4. Phones join the same WiFi; the "**FPV C5 Lap Timer**" link at the top of the netpack's page opens its screen (the MSP peer, or `fpv-c5-lt.local` found on the same WiFi).
-5. Phones / PCs **up to the number set** (default 5); one more place is always free for FPV C5 Lap Timer. The page lists the devices on the WiFi with their signal.
-6. To go back, pick "Client" and save.
+**クライアントモード**（v2.3.0）
+- 接続先を **5 つまで**登録できます（SSID・パスワード）。パスワードは表示しません（変えないときは空欄）。SSID を消すと削除されます。
+- **接続先の選び方**：**選んだもの（●）**、または**自動**（つなぐときに周りを探し、登録した中で電波が一番強いもの）。
+- **IP アドレス**：自動（DHCP）または**固定**（IP アドレス・サブネットマスク・ゲートウェイ・DNS。DNS が空欄ならゲートウェイ）。固定は、登録したすべての接続先で同じアドレスを使います。FPV C5 Lap Timer の「netpack アドレス」にその IP を入れておけば、すぐにつながります。
+- どの接続先にもつながらないときは、設定用の WiFi（`ELRS-NETpack-Setup`）を出し、15 秒ごとにつなぎ直します。つながっていた WiFi が切れたときは 10 秒ごとに再接続し、60 秒戻らなければ設定用の WiFi を出します。
+- v2.2.x までの接続先は、1 件目にそのまま引き継がれます。
 
-**USB tethering** (host mode only)
+**ホストモード**：SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）・**スマホ・PC の接続台数**（1〜9 台、初期値 5 台）（v2.3.0）。
+- ブリッジとして使うための制限です。**FPV C5 Lap Timer の 1 台分はいつも空けておき**、スマホ・PC は設定した台数までにします（初期値は 5 台。FPV C5 Lap Timer のホストモードの初期値と同じ）。
+- 上限を超えてつないだ機器は外し、30 秒間は入れません。FPV C5 Lap Timer は、OSD の接続（TCP）をしてきた機器として覚えておきます（一度つながったあとは、いつでも入れます）。
+- netpack の WiFi で大勢が観戦するときは、台数を増やしてください（WiFi 全体で最大 10 台）。
 
-With an Android phone on the XIAO's USB-C and its "USB tethering" on, the devices on the netpack's WiFi (FPV C5 Lap Timer, phones) reach the internet through the phone's mobile data (FPV C5 Lap Timer's update check and online update, for instance).
+**USB テザリング**：ON / OFF（ホストモードのみ）。
 
-- Tick "**USB テザリング**" (USB tethering) on the WiFi settings page and save (off by default).
-- On the phone: Settings → Network & internet → Hotspot & tethering → **USB tethering** (names vary). RNDIS (most Android phones) and CDC-NCM / ECM (newer Pixels and others) work. **iPhones do not.**
-- The settings page shows the state (waiting for a phone → turn tethering on → waiting for an address → **up**).
-- The netpack passes the devices' DNS on to the phone's and routes their traffic out through the phone (NAPT).
-- The tethering phone itself should not join the netpack's WiFi (its way out would loop back to the netpack).
+**物理スイッチ**（v2.3.0）：ホストモードかクライアントモードかを、本体のスイッチで切り替えられます。
+- 設定ページの「**物理スイッチを使う**」にチェックを入れます（初期値はチェックなし）。
+- スイッチは **D4（GPIO5）と GND の間**につなぎます（内部プルアップ。抵抗は不要）。**ON（つながる）でホストモード、OFF（離れる）でクライアントモード**です。
+- スイッチを読むのは**起動したときだけ**です。切り替えたら、電源を入れ直す（または再起動する）と反映します。動いている途中の切り替えは見ません。
+- スイッチ「あり」の間は、設定ページの「接続方式」の選択よりスイッチが優先されます（選択は、スイッチを「なし」に戻したときのために残ります）。設定ページに、今回の起動でのスイッチの状態とモードが出ます。
 
-### USB tethering cabling and power (important)
+接続方式・ホストの WiFi・テザリングを変えると、保存後に再起動します。
 
-- The XIAO is the USB **host**. Plug a **USB-C (male) → USB-A (female) OTG adapter** into the XIAO and use the phone's charging cable (USB-A → phone). A USB-C ↔ USB-C cable makes the phone the host and does not work.
-- The phone only sees the connection with **5 V on VBUS**. The XIAO's 5V pin is the USB VBUS, so a netpack **powered through its 5V pin** (through a diode, from a 5 V BEC or USB supply) puts 5 V there. With only a LiPo on the BAT pads there is no 5 V, and the phone sees nothing.
-- The phone tries to charge from VBUS (up to about 500 mA). Leave the supply some headroom.
-- While it is on, the USB port is not the XIAO's serial port: **the log goes to D6 (GPIO43, UART0 TX, 115200)**. Update from the **Update** page, or hold BOOT while plugging the XIAO into a PC.
+> **WiFi のチャンネル**：ESP-NOW は**チャンネル 1** 固定です（ELRS VRx バックパックの仕様）。netpack の XIAO が接続するルーター、ホストモードの WiFi は、2.4 GHz の**チャンネル 6〜11** にしてください（1〜4 だと OSD と電波を取り合います）。
 
 ---
 
-## Connecting FPV C5 Lap Timer and RotorHazard
+## ホストモードと USB テザリング
 
-**FPV C5 Lap Timer** (Settings → ELRS OSD)
-- Connection: **"WiFi（elrs-netpack XIAO, TCP）"**
-- netpack address: `auto` (FPV C5 Lap Timer in host mode looks among the devices on its WiFi; in client mode it looks up `elrs-netpack.local`). With a fixed netpack address, that IP can go here directly.
-- "ELRS netpack 接続中" (connected) on the settings screen means it works.
+**ホストモードの設定**（WiFi 設定ページ）
 
-**RotorHazard** (Raspberry Pi)
-- Install the plugin **[yanazoo/vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)** and set:
+1. 「接続方式」で **ホスト** を選び、ホストの SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）を入れて保存します。netpack が再起動し、その WiFi を出します（初期値：SSID `ELRS-NETpack`、パスワード `elrs-netpack`、6 ch）。
+2. 設定ページは `http://192.168.4.1/`（または `http://elrs-netpack.local/`）です。
+3. FPV C5 Lap Timer は **クライアントモード** で、接続先にこの SSID とパスワードを登録します。netpack アドレスは `auto` のままで、FPV C5 Lap Timer が `elrs-netpack.local` で netpack を見つけます。
+4. スマホもこの WiFi に接続し、netpack の設定ページのいちばん上の「**FPV C5 Lap Timer**」のリンクから、その画面を開けます（MSP の接続元、または同じ WiFi の `fpv-c5-lt.local` を自動で探します）。
+5. スマホ・PC は **設定した台数まで**（初期値 5 台）です。FPV C5 Lap Timer の 1 台分は別にいつも空いています。設定ページに、つながっている機器のアドレスと電波の強さが出ます。
+6. クライアントモードに戻すときは、設定ページで「クライアント」を選んで保存します。
+
+**USB テザリング**（ホストモードのときだけ）
+
+netpack の XIAO の USB-C に Android スマホをつなぎ、スマホの「USB テザリング」を ON にすると、netpack の WiFi につながった機器（FPV C5 Lap Timer ・スマホ）がスマホのモバイル通信でインターネットへ出られます（FPV C5 Lap Timer の「最新版を確認」・オンライン更新など）。
+
+- WiFi 設定ページの「**USB テザリング**」にチェックを入れて保存します（初期値 OFF）。
+- スマホ側：「設定 → ネットワークとインターネット → テザリング → **USB テザリング**」を ON（機種により名前が違います）。RNDIS（多くの Android）と CDC-NCM / ECM（新しい Pixel など）に対応しています。**iPhone は非対応**です。
+- 設定ページの「USB テザリング」に状態が出ます（スマホ待ち → テザリングを ON にしてください → アドレス待ち → **接続中**）。
+- netpack は機器からの DNS をスマホの DNS へ中継し、通信をスマホ経由で外へ出します（NAPT）。
+- テザリングに使うスマホ自身は、netpack の WiFi に接続しないでください（スマホの外への道が netpack に戻ってしまいます）。
+
+### USB テザリングの配線・電源（大事）
+
+- XIAO が USB の**ホスト**になります。**USB-C（オス）→ USB-A（メス）の OTG 変換アダプター**を XIAO に挿し、スマホの充電ケーブル（USB-A → スマホ）でつなぎます。USB-C ↔ USB-C のケーブルだと、スマホの方がホストになってしまい動きません。
+- スマホが USB 接続を認識するには、USB の **5V（VBUS）**が出ている必要があります。XIAO の 5V ピンは USB の VBUS とつながっているため、netpack を **5V ピンから給電**（ダイオード経由、5V の BEC や USB 電源から）していると VBUS に 5V が出ます。LiPo を BAT パッドにつないでいるだけの場合は 5V が出ないため、スマホが認識しません。
+- スマホは VBUS から充電しようとして電流（最大 500 mA 程度）を流します。電源に余裕を持たせてください。
+- ON の間は USB が XIAO のシリアル・書き込みに使えません。**ログは D6（GPIO43、UART0 TX、115200）**に出ます。書き込みは「**更新**」ページから、または BOOT ボタンを押しながら USB を PC につないで書き込みます。
+
+---
+
+## FPV C5 Lap Timer・RotorHazard との接続
+
+**FPV C5 Lap Timer**（設定タブ → ELRS OSD）
+- 接続方式：**「WiFi（elrs-netpack XIAO, TCP）」**
+- netpack アドレス：`auto`（ホストモードの FPV C5 Lap Timer は自分の WiFi につながった機器から、クライアントモードの FPV C5 Lap Timer は `elrs-netpack.local` で探します）。netpack の IP を固定した場合は、その IP を直接入れることもできます。
+- 設定画面に「ELRS netpack 接続中」と出れば OK です。
+
+**RotorHazard**（Raspberry Pi）
+- プラグイン **[yanazoo/vrxc_elrs](https://github.com/yanazoo/vrxc_elrs)** をインストールし、次のように設定します。
 ```
-Settings → ELRS Backpack General
-  Backpack connection type → SOCKET
-  ELRS Netpack address     → elrs-netpack.local (or the netpack's IP address)
-  Port                     → 8080
+Settings → ELRS バックパック 一般設定
+  バックパック接続タイプ → SOCKET
+  ELRS Netpack アドレス  → elrs-netpack.local（または netpack の IP アドレス）
+  ポート                 → 8080
 ```
 
 ---
 
-## Extra hardware (optional)
+## 追加ハードウェア（任意）
 
-| Part | Notes |
+| 部品 | 備考 |
 |---|---|
-| Passive buzzer | GPIO4 (+) / GPIO6 (−) |
-| 7-color auto-cycling LED | GPIO9 (D10) + **100 Ω resistor** in series |
-| 2 × 100 kΩ resistors | LiPo voltage divider |
-| LiPo battery | 1S recommended (shared by the netpack XIAO and the bridge) |
+| パッシブブザー | GPIO4(+) / GPIO6(−) に接続 |
+| 7 色自動カラーサイクル LED | GPIO9（D10）+ **100 Ω 抵抗**を直列に接続 |
+| 100 kΩ 抵抗 × 2 | LiPo 電圧監視用の分圧回路 |
+| LiPo バッテリー | 1S 推奨（netpack の XIAO とブリッジの共有電源） |
 
-| XIAO GPIO | Pin | Connects to |
+| XIAO GPIO | ピン名 | 接続先 |
 |---|---|---|
-| GPIO3 | D2 / A0 | Divider midpoint (LiPo+ → R1 100kΩ → GPIO3 → R2 100kΩ → GND) |
-| GPIO4 | D3 | Buzzer + |
-| GPIO6 | D5 | Buzzer − |
-| GPIO9 | D10 | LED anode (+ 100 Ω → GND) |
-| GPIO21 | — | Built-in LED (active-LOW, on board) |
-| GPIO43 | D6 | Log out (UART0 TX, while USB tethering is on) |
-| GPIO5 | D4 | Mode switch (optional; other side to GND, internal pull-up) (v2.3.0) |
+| GPIO3 | D2 / A0 | 分圧抵抗の中点（LiPo+ → R1 100kΩ → GPIO3 → R2 100kΩ → GND） |
+| GPIO4 | D3 | ブザー プラス極（+） |
+| GPIO6 | D5 | ブザー マイナス極（−） |
+| GPIO9 | D10 | LED アノード（+ 100 Ω → GND） |
+| GPIO21 | — | 内蔵 LED（負論理、基板上） |
+| GPIO43 | D6 | ログ出力（UART0 TX、USB テザリング ON の間） |
+| GPIO5 | D4 | モード切り替えの物理スイッチ（任意。もう一方は GND。内部プルアップ）（v2.3.0） |
 
-> **Important:** always put a **100 Ω** resistor in series with the notification LED (to protect GPIO9).
+> **重要:** 通知 LED には必ず **100 Ω** の直列抵抗を入れてください（GPIO9 保護のため）。
 
 ---
 
-## Features (netpack XIAO: elrs-xiao-webui)
+## 機能一覧（netpack の XIAO：elrs-xiao-webui）
 
-| Feature | Description |
+| 機能 | 説明 |
 |---|---|
-| TCP MSP bridge | TCP 8080 ⇄ UART; a new connection replaces the old one (FPV C5 Lap Timer restarted or rejoined) |
-| Web settings | WiFi, voltage, QR and update pages; Japanese / English |
-| WiFi (client) | 5 networks (selected / automatic), fixed address, setup WiFi (captive portal) when none can be joined |
-| WiFi (host) | The netpack's own WiFi (SSID, password, ch 6-11), FPV C5 Lap Timer + phones / PCs (1-9, default 5), DNS relay |
-| USB tethering | In host mode, to the internet through an Android phone (RNDIS / NCM / ECM, NAPT) |
-| mDNS | `elrs-netpack.local` (web and TCP) |
-| Firmware update | Online (GitHub release) or from a file |
-| Voltage monitor and alarm | Shows the LiPo voltage; buzzer and LED below the threshold |
-| Buzzer / LED notices | 2 beeps on WiFi joined, 1 on settings saved, 1 when FPV C5 Lap Timer (MSP) connects |
-| Lost-connection notice | **When the TCP (MSP) connection to FPV C5 Lap Timer drops: 5 long beeps and the LED blinking at medium speed** (until it reconnects). In host mode it is noticed as soon as FPV C5 Lap Timer leaves the netpack's WiFi, otherwise in about 11 s (TCP keepalive). The netpack's own WiFi dropping for 5 s or more has its own notice (buzzer for 5 s, fast LED blink; a short drop is reconnected quietly) |
-| Max TX power | 21 dBm on WiFi and ESP-NOW |
-| Backpack version | Reports version 10.1 to the connecting host |
+| TCP MSP ブリッジ | TCP 8080 ⇄ UART。新しい接続が来たら古い接続と入れ替え（FPV C5 Lap Timer の再起動・つなぎ直し） |
+| Web 設定画面 | WiFi・電圧・QR・更新の各ページ。日本語 / 英語の切り替え |
+| WiFi（クライアント） | 接続先 5 件（選択 / 自動）、IP 固定、つながらないときは設定用の WiFi（キャプティブポータル） |
+| WiFi（ホスト） | netpack の WiFi（SSID・パスワード・ch 6〜11）、FPV C5 Lap Timer ＋ スマホ・PC（1〜9 台、初期値 5 台）、DNS の中継 |
+| USB テザリング | ホストモードで Android スマホからインターネットへ（RNDIS / NCM / ECM、NAPT） |
+| mDNS | `elrs-netpack.local`（Web と TCP の両方） |
+| ファーム更新 | ネットから（GitHub のリリース）／ファイルから |
+| 電圧監視・アラーム | LiPo 電圧を表示。しきい値を下回るとブザーと LED |
+| ブザー・LED 通知 | WiFi 接続で 2 音、設定保存で 1 音、FPV C5 Lap Timer（MSP）がつながると 1 音 |
+| 接続切れの通知 | **FPV C5 Lap Timer（MSP の TCP）との接続が切れたら、ブザーの長音 5 回と LED の中速点滅**（つながり直すまで点滅）。ホストモードでは、FPV C5 Lap Timer が netpack の WiFi から抜けたらすぐ、それ以外は約 11 秒で気づきます（TCP キープアライブ）。netpack 自身の WiFi が 5 秒以上切れたときは別の通知（ブザー 5 秒・LED 高速点滅。数秒で戻る短い切断は、鳴らさずにつなぎ直します） |
+| 最大送信出力 | WiFi・ESP-NOW とも 21 dBm |
+| バックパックバージョン | 接続元にバージョン 10.1 を返す |
 
-### How the ELRS Backpack bridge sends (elrs-espnow-bridge)
+### ELRSバックパック-ブリッジの送信方式（elrs-espnow-bridge）
 
-It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID as its own MAC (a goggle backpack only shows OSD packets from that UID) and sends ESP-NOW **broadcasts**: no waiting for an ACK, no retries.
+UDP のような**コネクションレス送信**です。ブリッジはパイロットのバインドフレーズの UID を自分の MAC にし（ゴーグルのバックパックは、その UID から来た OSD パケットだけを表示します）、ESP-NOW の**ブロードキャスト**で送ります。受信確認（ACK）は待たず、再送もしません。
 
-- One pilot's screen update (until the next `SET_SEND_UID`, or 20 ms without sends) goes out **3 times** in a row (`SEND_REPEATS`).
-- Copies of the same packet are at least **3 ms** apart. Each pilot's ELRS 2.4 GHz radio hops every few ms and about a third of its hops land in channel 1, so a slightly later copy meets a different hop and gets through more often.
-- Goggles that are switched off, however many, don't delay anyone else's OSD. Two goggles on the same bind phrase show the same thing.
-- Longer dropouts are covered by the sender's spaced resends (RotorHazard's vrxc_elrs, the lap timer).
-- **Receive filter** (custom MSP `0x0F01`, payload = a 6-byte UID, empty to clear): when the host (FPV C5 Lap Timer) names the race director's UID, the bridge passes on only frames **from** that UID (the director's radio switch), not other bridges' broadcast OSD or pilots' own DVR switches. The bridge answers `0x0F01` (payload `1`). Hosts that don't send it (RotorHazard's vrxc_elrs) get everything as before. While a filter is set, the bridge also listens in promiscuous mode for the director's switch (v2.12); the same frame heard twice within 500 ms is passed on once.
-- **Link watch** (custom MSP `0x0F03`, payload `1` start / `0` stop, answered with `0x0F03`): asked by the host (FPV C5 Lap Timer), the bridge hears all ESP-NOW on channel 1 and reads the link reports pilots' radio backpacks send (ELRS 3.4+, *Backpack → Telemetry = ESPNOW*). Per UID it reports `0x0F04` (payload: UID 6 bytes, uplink LQ, age in 0.1 s), at once on link up / down and every second otherwise. It stops by itself 20 s after the host's last request.
-- **VTX reports** (custom MSP `0x0F05`, during the link watch): when a pilot's radio sends its VTX setting (Lua *VTX Administrator*), the bridge reports `0x0F05` (payload: UID 6 bytes, the VTX setting's first 2 bytes = band/channel index `(band-1)*8+channel`, or a frequency in MHz).
-- The XIAO C5 bridge stays on 2.4 GHz (no 5 GHz).
-- Frames received over ESP-NOW are queued and written to UART from `loop()` (the WiFi task never waits on the UART).
-- Per-packet logs only with `-DBRIDGE_VERBOSE`.
-
----
-
-## Web UI pages
-
-**Admin password** (v2.3.0): every page but QR (WiFi, voltage, update) opens **after a login**. The default password is **`admin`** (public): **change it** under "管理者パスワード" on the WiFi page (the page warns while it is the default). A login lasts **the time set on the WiFi page** (5 or 30 min, 1, 6 or 12 h; default 12 h) or until the netpack restarts; while logged in, a "**ログアウト**" (log out) button sits at the right of the menu.
-
-**`/wifi` — WiFi**: see [above](#wifi-settings-wifi).
-
-**`/qr` — QR codes** (v2.3.0)
-- Join the **ELRS-NETpack WiFi** (host mode's SSID and password): scan it with the phone's camera
-- Open **FPV C5 Lap Timer**'s screen (`http://fpv-c5-lt.local/`)
-- Made in the netpack: shown without the internet too
-- Open **without a password**. In host mode, `http://192.168.4.1/` opens on this page
-
-**`/update` — Firmware update**
-- The firmware's version (release and build)
-- Online: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update) when there is a newer release; it is written and the netpack restarts
-- A file: pick the firmware.bin of `elrs-xiao-webui`; it is written (with its progress shown) and the netpack restarts, then the page reloads. Settings are kept
-
-**`/voltage` — Voltage monitor**
-- Shows the current LiPo voltage
-- Divider ratio: `2.0` for equal resistors (100 kΩ + 100 kΩ)
-- Alarm threshold: default 3.5 V (1S LiPo low voltage)
-- Voltage alarm, buzzer and notification LED on / off each
+- 1 人分の画面更新（次の `SET_SEND_UID` まで、または 20 ミリ秒送信が途切れるまで）を、続けて **3 回**送ります（`SEND_REPEATS`）
+- 同じパケットのコピー同士は**最低 3 ミリ秒**あけます。各パイロットの ELRS 2.4GHz 送信機は数ミリ秒ごとに周波数を変え、その約 3 割がチャンネル 1 に入るため、少し後のコピーは別の周波数のタイミングに当たり、届きやすくなります
+- 電源の入っていないゴーグルがいくつあっても、ほかのパイロットの表示は遅れません。同じバインドフレーズのゴーグルが 2 台あれば、2 台とも同じ表示になります
+- 長めの電波の途切れは、送信元（RotorHazard の vrxc_elrs、ラップタイマー）の時間差の再送で補います
+- **受信フィルター**（独自 MSP `0x0F01`、ペイロード＝6 バイトの UID、空で解除）：接続元（FPV C5 Lap Timer）がレースディレクターの UID を指定すると、ブリッジはその UID **から**届いたフレーム（ディレクターの送信機のスイッチ）だけを接続元に渡します。ほかのブリッジのブロードキャスト OSD や、パイロット自身の DVR スイッチは渡しません。ブリッジは `0x0F01`（ペイロード `1`）で応答します。これを送らない接続元（RotorHazard の vrxc_elrs）には、これまでどおりすべて渡します。フィルターを指定している間は、受信モニター（promiscuous）でもディレクターのスイッチを聞き取ります（v2.12）。500 ms 以内に同じフレームを 2 回以上聞いたときは 1 回だけ渡します
+- **リンクの見張り**（独自 MSP `0x0F03`、ペイロード `1` で開始・`0` で終了、`0x0F03` で応答）：接続元（FPV C5 Lap Timer）が頼むと、ブリッジはチャンネル 1 の ESP-NOW をすべて受信し、パイロットの送信機のバックパック（ELRS 3.4 以降、*Backpack → Telemetry = ESPNOW*）が送るリンク情報を読みます。UID ごとに `0x0F04`（ペイロード：UID 6 バイト、上りの LQ、経過時間 0.1 秒単位）で、リンクした・切れたときはすぐ、それ以外は 1 秒ごとに知らせます。接続元からの依頼が 20 秒途切れると自動で止まります
+- **VTX の知らせ**（独自 MSP `0x0F05`、リンクの見張り中）：パイロットの送信機が VTX の設定（Lua の *VTX Administrator*）を送ると、`0x0F05`（ペイロード：UID 6 バイト、VTX 設定の先頭 2 バイト＝バンド・チャンネルの番号 `(バンド-1)*8+チャンネル`、または MHz の周波数）で知らせます
+- XIAO C5 のブリッジは、2.4 GHz だけを使います（5 GHz は使いません）
+- ESP-NOW で受け取ったフレームはいったんキューに入れ、`loop()` から UART に書き出します（WiFi のタスクで UART を待たない）
+- パケットごとのログは、`-DBRIDGE_VERBOSE` を付けてビルドしたときだけ出ます
 
 ---
 
-## LEDs
+## Web UI ページ
 
-**Notification LED (GPIO9 — 7-color auto-cycling)**
+**管理者パスワード**（v2.3.0）：QR 以外のページ（WiFi・電圧・更新）は、**ログインしてから**開けます。初期パスワードは **`admin`**（公開している値です）。WiFi のページの「管理者パスワード」で**必ず変更してください**（初期値のままだと注意が出ます）。一度ログインすると、その端末は**ログインの有効時間**（WiFi のページで 5 分・30 分・1 時間・6 時間・12 時間から選択、初期値 12 時間）の間、または netpack の再起動まで、入り直さずに使えます。ログイン中は、メニューの右に「**ログアウト**」ボタンが出ます。
 
-| State | Pattern |
+**`/wifi` — WiFi 設定**：[上記](#wifi-の設定wifi)を参照。
+
+**`/qr` — QR コード**（v2.3.0）
+- **ELRS-NETpack の WiFi**（ホストモードの SSID・パスワード）に接続する QR コード。スマホのカメラで読むと接続できます
+- **FPV C5 Lap Timer** の画面（`http://fpv-c5-lt.local/`）を開く QR コード
+- QR コードは netpack の中で作るので、インターネットがなくても表示できます
+- **パスワードなし**で見られます。ホストモードで `http://192.168.4.1/` を開くと、最初にこのページが出ます
+
+**`/update` — ファーム更新**
+- 今のファームの版（リリース名とビルド）
+- ネットから更新：「🔍 最新版を確認」→ 新しい版があれば「⬇️ 〜に更新」で書き込み、再起動します
+- ファイルから：`elrs-xiao-webui` の firmware.bin を選んで書き込み、再起動します。書き込み中は進み具合（%）が出て、再起動が終わるとページを読み直します。設定は残ります
+
+**`/voltage` — 電圧モニター**
+- 現在の LiPo 電圧を表示
+- 分圧比：100 kΩ + 100 kΩ の等値抵抗の場合は `2.0` を設定
+- アラーム閾値：初期値 3.5 V（1S LiPo 低電圧警告）
+- 電圧アラーム / ブザー / 通知 LED の有効・無効を個別に設定可能
+
+---
+
+## LED 動作
+
+**通知 LED（GPIO9 — 7 色自動サイクル）**
+
+| 状態 | パターン |
 |---|---|
-| Setup WiFi (waiting for settings) | Slow blink, 500 ms |
-| WiFi lost (client mode, for 5 s or more) | Fast blink, 80 ms (until reconnected) |
-| The connection to FPV C5 Lap Timer (MSP) dropped (after it was up) | Medium blink, 300 ms (until it reconnects) |
-| Voltage alarm | On |
-| Normal (client joined, or host mode) | Heartbeat, 2 pulses / 2 s (peak ~4%) |
-| LED disabled | Off |
+| 設定用の WiFi（設定待ち） | ゆっくり点滅 500 ms |
+| WiFi 切断中（クライアントモード、5 秒以上つながらないとき） | 高速点滅 80 ms（再接続まで継続） |
+| FPV C5 Lap Timer（MSP）との接続が切れた（一度つながったあと） | 中速点滅 300 ms（つながり直すまで） |
+| 電圧アラーム | 点灯 |
+| 通常（クライアントで接続中・ホストモード） | ハートビート 2 拍 / 2 秒（ピーク輝度約 4%） |
+| LED 無効（設定オフ） | 消灯 |
 
-**Built-in LED (GPIO21 — active-LOW)**
+**内蔵 LED（GPIO21 — 負論理）**
 
-| State | Pattern |
+| 状態 | パターン |
 |---|---|
-| Joining WiFi | On |
-| Setup WiFi | Blink 200 ms |
-| Joined, or host mode | Off |
+| WiFi 接続試行中 | 点灯 |
+| 設定用の WiFi | 点滅 200 ms |
+| 接続完了・ホストモード | 消灯 |
 
 ---
 
-## Stored settings (NVS)
+## NVS 保存設定一覧
 
-Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an erase in the web flasher clears them.
+すべての設定は電源オフ後も保持されます（ESP32 の Preferences、名前空間 `elrs`）。Web 書き込みページで「消去」にチェックを入れたときだけ消えます。
 
-| Key | Type | Default | Description |
+| キー | 型 | 初期値 | 説明 |
 |---|---|---|---|
-| `netMode` | UChar | 0 | Connection (0 = client, 1 = host); the mode switch, when set, decides instead |
-| `swMode` | UChar | 0 | Use a mode switch (0 = no, 1 = yes) |
-| `ss0`–`ss4` / `sp0`–`sp4` | String | (empty) | Client networks 1-5: SSID / password (v2.3.0) |
-| `nets` | Bool | false | The 5 networks are saved (false: `ssid` / `wifiPass` become the first) |
-| `staSel` | UChar | 0 | The selected network (0-4) |
-| `staAuto` | Bool | false | Automatic (the strongest saved network) |
-| `ipFix` | Bool | false | Fixed address |
-| `ip` / `mask` / `gw` / `dns` | UInt | 0 / 255.255.255.0 / 0 / 0 | The fixed IP address, subnet mask, gateway, DNS |
-| `configured` | Bool | false | At least one network is saved |
-| `ssid` / `wifiPass` | String | — | The network of v2.2.x and before (moved to the first) |
-| `hSsid` | String | `ELRS-NETpack` | Host mode SSID |
-| `hPass` | String | `elrs-netpack` | Host mode password |
-| `hCh` | UChar | 6 | Host mode channel (6-11) |
-| `hMax` | UChar | 5 | Host mode phones / PCs (1-9, besides FPV C5 Lap Timer) |
-| `lapMac` | Bytes | — | FPV C5 Lap Timer's MAC (learned from its OSD connection; never sent off by the limit) |
-| `tether` | Bool | false | USB tethering (host mode only) |
-| `admPass` | String | `admin` | Admin password (every page but QR; change it) |
-| `loginMin` | UShort | 720 | How long a login lasts (minutes: 5, 30, 60, 360, 720) |
-| `vbatRatio` | Float | 2.0 | Voltage divider ratio |
-| `alarmV` | Float | 3.5 | Alarm threshold (V) |
-| `vbatAlarmEn` | Bool | false | Voltage alarm on |
-| `buzzerEn` | Bool | true | Buzzer on |
-| `ledEn` | Bool | true | Notification LED on |
-| `langJa` | Bool | true | Language (true = Japanese) |
+| `netMode` | UChar | 0 | 接続方式（0 = クライアント、1 = ホスト）。物理スイッチ「あり」の間はスイッチが優先 |
+| `swMode` | UChar | 0 | 物理スイッチを使う（0 = 使わない、1 = 使う） |
+| `ss0`〜`ss4` / `sp0`〜`sp4` | String | （空） | クライアントの接続先 1〜5 の SSID / パスワード（v2.3.0） |
+| `nets` | Bool | false | 接続先 5 件の形で保存済み（false なら `ssid` / `wifiPass` を 1 件目に引き継ぎ） |
+| `staSel` | UChar | 0 | 選んだ接続先（0〜4） |
+| `staAuto` | Bool | false | 自動（電波が一番強い接続先） |
+| `ipFix` | Bool | false | IP アドレスを固定 |
+| `ip` / `mask` / `gw` / `dns` | UInt | 0 / 255.255.255.0 / 0 / 0 | 固定する IP アドレス・サブネットマスク・ゲートウェイ・DNS |
+| `configured` | Bool | false | 接続先が 1 つ以上ある |
+| `ssid` / `wifiPass` | String | — | v2.2.x までの接続先（1 件目に引き継ぎ） |
+| `hSsid` | String | `ELRS-NETpack` | ホストモードの SSID |
+| `hPass` | String | `elrs-netpack` | ホストモードのパスワード |
+| `hCh` | UChar | 6 | ホストモードのチャンネル（6〜11） |
+| `hMax` | UChar | 5 | ホストモードのスマホ・PC の接続台数（1〜9、FPV C5 Lap Timer とは別） |
+| `lapMac` | Bytes | — | FPV C5 Lap Timer の MAC アドレス（OSD の接続から覚える。台数の制限で外さない） |
+| `tether` | Bool | false | USB テザリング（ホストモードのみ） |
+| `admPass` | String | `admin` | 管理者パスワード（QR 以外のページ。変更してください） |
+| `loginMin` | UShort | 720 | ログインの有効時間（分：5・30・60・360・720） |
+| `vbatRatio` | Float | 2.0 | 電圧分圧比 |
+| `alarmV` | Float | 3.5 | アラーム閾値（V） |
+| `vbatAlarmEn` | Bool | false | 電圧アラーム有効 |
+| `buzzerEn` | Bool | true | ブザー有効 |
+| `ledEn` | Bool | true | 通知 LED 有効 |
+| `langJa` | Bool | true | 言語（true = 日本語） |
 
 ---
 
-## Default WiFi (public defaults; changing them is recommended)
+## 初期の WiFi（公開されている初期値です。使う場合は変更をおすすめします）
 
-| | Setup WiFi (client mode, not joined) | Host mode WiFi |
+| | 設定用の WiFi（クライアントモードで未接続のとき） | ホストモードの WiFi |
 |---|---|---|
-| SSID | `ELRS-NETpack-Setup` | `ELRS-NETpack` (editable) |
-| Password | `elrs-netpack` | `elrs-netpack` (editable) |
-| IP address | `192.168.4.1` | `192.168.4.1` |
-| Settings URL | `http://192.168.4.1/` | `http://192.168.4.1/` |
+| SSID | `ELRS-NETpack-Setup` | `ELRS-NETpack`（変更可） |
+| パスワード | `elrs-netpack` | `elrs-netpack`（変更可） |
+| IP アドレス | `192.168.4.1` | `192.168.4.1` |
+| 設定 URL | `http://192.168.4.1/` | `http://192.168.4.1/` |
 
-The settings pages' (all but QR) **admin password defaults to `admin`** (a public default: change it on the WiFi page).
+設定ページ（QR 以外）の**管理者パスワードの初期値は `admin`** です（公開している初期値なので、WiFi のページで変更してください）。
 
 ---
 
-## Troubleshooting
+## トラブルシューティング
 
-| Symptom | What to do |
+| 症状 | 対処 |
 |---|---|
-| The netpack doesn't join the WiFi | Join the setup WiFi (`ELRS-NETpack-Setup`) and check the SSID and password; the router must offer 2.4 GHz (5 GHz only won't do) |
-| `elrs-netpack.local` not found | Same network? Fix the netpack's address and use that IP |
-| FPV C5 Lap Timer doesn't show "ELRS netpack 接続中" | FPV C5 Lap Timer's connection ("WiFi（elrs-netpack XIAO, TCP）"), its netpack address (`auto` or the IP), the "MSP" line on the netpack's page |
-| No OSD in the goggles | The bridge wiring (TX/RX crossed, GND), the bridge's boot log, the bind phrase matching the goggles, the ESP-NOW channel (1) |
-| OSD drops or lags | Router / host WiFi on ch 6-11; the bridge's antenna (fit the XIAO C3 / C5 antenna) |
-| USB tethering stays at "waiting for a phone" | The OTG adapter on the XIAO side; power through the 5V pin (VBUS needs 5 V) |
-| USB tethering stays at "turn tethering on" | Turn the phone's USB tethering on; iPhones don't work |
-| Can't write over USB while tethering | Use the Update page, or hold BOOT while plugging into a PC |
-| A PlatformIO build fails | The first build downloads packages (takes a while); try `pio pkg update`. On Windows, `No module named intelhex`: `C:\Users\<user>\.platformio\penv\Scripts\python.exe -m pip install intelhex` |
+| netpack が WiFi につながらない | 設定用の WiFi（`ELRS-NETpack-Setup`）に接続して、SSID・パスワードを確認。ルーターは 2.4 GHz を出しているか（5 GHz だけでは不可） |
+| `elrs-netpack.local` が見つからない | 同じネットワークか確認。netpack の IP を固定して、その IP を直接指定 |
+| FPV C5 Lap Timer に「ELRS netpack 接続中」と出ない | FPV C5 Lap Timer の接続方式が「WiFi（elrs-netpack XIAO, TCP）」か、netpack アドレス（`auto` か IP）、netpack の設定ページの「MSP」の行 |
+| OSD がゴーグルに表示されない | ブリッジの配線（TX / RX の交差・GND）、ブリッジの起動ログ、バインドフレーズがゴーグル側と一致しているか、ESP-NOW チャンネル（ch 1） |
+| 表示が抜ける・遅れる | ルーター／ホストモードの WiFi を ch 6〜11 に。ブリッジのアンテナ（XIAO C3 / C5 は付属アンテナを接続） |
+| USB テザリングが「スマホ待ち」のまま | OTG 変換アダプターを XIAO 側に挿しているか、5V ピンから給電しているか（VBUS に 5V が必要） |
+| USB テザリングが「テザリングを ON にしてください」のまま | スマホの USB テザリングを ON。iPhone は非対応 |
+| テザリング中に USB で書き込めない | 更新ページから書き込むか、BOOT ボタンを押しながら USB を PC につなぐ |
+| PlatformIO のビルドが失敗する | 初回はパッケージのダウンロードに時間がかかります。`pio pkg update` を試す。Windows で `No module named intelhex` は `C:\Users\<ユーザー名>\.platformio\penv\Scripts\python.exe -m pip install intelhex` |
 
 ---
 
-## Credits & fork info
+## クレジット・フォーク情報
 
-This project is a fork of the **ELRS Netpack** concept designed for the Waveshare ESP32-S3 Ethernet board.
+このプロジェクトは、Waveshare ESP32-S3 Ethernet ボード向けに設計された **ELRS Netpack** コンセプトのフォークです。
 
-- Original ELRS backpack protocol: [ExpressLRS/backpack](https://github.com/ExpressLRS/backpack)
+- 元の ELRS バックパックプロトコル: [ExpressLRS/backpack](https://github.com/ExpressLRS/backpack)
 - RotorHazard: [RotorHazard/RotorHazard](https://github.com/RotorHazard/RotorHazard)
 - FPV C5 Lap Timer: [yanazoo/FPV-C5-Lap-Timer](https://github.com/yanazoo/FPV-C5-Lap-Timer)
-- Seeed Studio XIAO ESP32-S3 docs: [wiki.seeedstudio.com](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
-- This fork: [yanazoo/elrs-netpack](https://github.com/yanazoo/elrs-netpack)
+- Seeed Studio XIAO ESP32-S3 ドキュメント: [wiki.seeedstudio.com](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
+- このフォーク: [yanazoo/elrs-netpack](https://github.com/yanazoo/elrs-netpack)
 
-The two-board setup (netpack XIAO + ELRS Backpack bridge) was made to get around an ESP32 sharing its 2.4 GHz radio between WiFi and ESP-NOW.
+2 台構成（netpack の XIAO ＋ ELRSバックパック-ブリッジ）は、ESP32 の 2.4 GHz 無線を WiFi と ESP-NOW で共有することによる制限を解決するために開発されました。
