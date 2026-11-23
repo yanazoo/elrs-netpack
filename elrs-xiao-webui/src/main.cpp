@@ -11,6 +11,7 @@
 #include "esp_netif.h"
 #include "usb_tether.h"
 #include "fw_update.h"
+#include "qrcode.h"
 #include "log.h"
 #include "config.h"
 #include "led.h"
@@ -321,6 +322,7 @@ static String htmlHead(const char *title)
     h += "<nav>";
     h += "<a href='/wifi'>WiFi</a>";
     h += "<a href='/voltage'>"; h += L("Voltage", "電圧"); h += "</a>";
+    h += "<a href='/qr'>QR</a>";
     h += "<a href='/update'>"; h += L("Update", "更新"); h += "</a>";
     h += "<a class='lang' href='/lang'>"; h += (g_langJa ? "EN" : "JA"); h += "</a>";
     h += "</nav><hr>";
@@ -567,6 +569,79 @@ static String pageWifi(const String &msg = "")
     p += "</div>";
     p += "<button type='submit'>"; p += L("Save", "保存"); p += "</button>";
     p += "</form></body></html>";
+    return p;
+}
+
+// ── QR codes ──────────────────────────────────────────────────────────────────
+// Made here (esp_qrcode, no internet needed) and drawn as SVG.
+
+static String *g_qrOut = nullptr;
+
+static void qrToSvg(esp_qrcode_handle_t q)
+{
+    int n = esp_qrcode_get_size(q), m = n + 8;   // a 4-module quiet zone
+    String &o = *g_qrOut;
+    o += "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 "; o += m; o += " "; o += m;
+    o += "' shape-rendering='crispEdges' style='width:220px;height:220px;display:block;margin:8px auto'>";
+    o += "<rect width='100%' height='100%' fill='#fff'/><path fill='#000' d='";
+    char b[24];
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+            if (esp_qrcode_get_module(q, x, y)) {
+                snprintf(b, sizeof b, "M%d %dh1v1h-1z", x + 4, y + 4);
+                o += b;
+            }
+    o += "'/></svg>";
+}
+
+static String qrSvg(const String &text)
+{
+    String out;
+    g_qrOut = &out;
+    esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+    cfg.display_func = qrToSvg;
+    cfg.max_qrcode_version = 10;
+    cfg.qrcode_ecc_level = ESP_QRCODE_ECC_MED;
+    if (esp_qrcode_generate(&cfg, text.c_str()) != ESP_OK) out = "";
+    g_qrOut = nullptr;
+    return out;
+}
+
+// A WiFi QR code's field: \ ; , : " are escaped.
+static String wifiQrEsc(const String &in)
+{
+    String o;
+    for (size_t i = 0; i < in.length(); i++) {
+        char c = in[i];
+        if (c == '\\' || c == ';' || c == ',' || c == ':' || c == '"') o += '\\';
+        o += c;
+    }
+    return o;
+}
+
+static String pageQr()
+{
+    String p = htmlHead("QR");
+    const char *pass = g_hostPass.length() >= 8 ? g_hostPass.c_str() : HOST_PASS_DEFAULT;
+    p += "<h2>"; p += L("Join the ELRS-NETpack WiFi", "ELRS-NETpack の WiFi に接続"); p += "</h2>";
+    p += "<div class='card st' style='text-align:center'>";
+    p += qrSvg("WIFI:T:WPA;S:" + wifiQrEsc(g_hostSsid) + ";P:" + wifiQrEsc(pass) + ";;");
+    p += "SSID：<b>"; p += htmlEsc(g_hostSsid); p += "</b><br>";
+    p += L("Password: ", "パスワード："); p += "<b>"; p += htmlEsc(pass); p += "</b>";
+    if (!g_hostActive) {
+        p += "<div class='note'>";
+        p += L("The netpack is in client mode now: this WiFi is up in host mode.", "今はクライアントモードです。この WiFi は、ホストモードにしたときに出ます。");
+        p += "</div>";
+    }
+    p += "</div>";
+    p += "<h2>FPV C5 Lap Timer</h2>";
+    p += "<div class='card st' style='text-align:center'>";
+    p += qrSvg("http://fpv-c5-lt.local/");
+    p += "<a href='http://fpv-c5-lt.local/' target='_blank'>http://fpv-c5-lt.local/</a>";
+    p += "<div class='note'>";
+    p += L("Join the same WiFi first. If the phone can't open .local addresses, use the FPV C5 Lap Timer link (its IP address) at the top of the WiFi page.",
+           "先に同じ WiFi に接続してください。スマホが .local のアドレスを開けないときは、WiFi のページのいちばん上の「FPV C5 Lap Timer」のリンク（IP アドレス）を使ってください。");
+    p += "</div></div></body></html>";
     return p;
 }
 
@@ -1300,6 +1375,7 @@ void setup()
     webServer.on("/wifi",                HTTP_GET,  handleWifiGet);
     webServer.on("/wifi",                HTTP_POST, handleWifiPost);
     webServer.on("/voltage",             HTTP_GET,  handleVoltageGet);
+    webServer.on("/qr",                  HTTP_GET,  [] { webServer.send(200, "text/html", pageQr()); });
     webServer.on("/voltage",             HTTP_POST, handleVoltagePost);
     webServer.on("/lang",                HTTP_GET,  handleLangToggle);
     // Firmware update: from the internet (a router, or USB tethering) or a file.

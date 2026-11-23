@@ -271,7 +271,7 @@ Settings → ELRS Backpack General
 | Feature | Description |
 |---|---|
 | TCP MSP bridge | TCP 8080 ⇄ UART; a new connection replaces the old one (FPV C5 Lap Timer restarted or rejoined) |
-| Web settings | WiFi, voltage and update pages; Japanese / English |
+| Web settings | WiFi, voltage, QR and update pages; Japanese / English |
 | WiFi (client) | 5 networks (selected / automatic), fixed address, setup WiFi (captive portal) when none can be joined |
 | WiFi (host) | The netpack's own WiFi (SSID, password, ch 6-11), FPV C5 Lap Timer + phones / PCs (1-9, default 5), DNS relay |
 | USB tethering | In host mode, to the internet through an Android phone (RNDIS / NCM / ECM, NAPT) |
@@ -303,6 +303,11 @@ It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID
 ## Web UI pages
 
 **`/wifi` — WiFi**: see [above](#wifi-settings-wifi).
+
+**`/qr` — QR codes** (v2.3.0)
+- Join the **ELRS-NETpack WiFi** (host mode's SSID and password): scan it with the phone's camera
+- Open **FPV C5 Lap Timer**'s screen (`http://fpv-c5-lt.local/`)
+- Made in the netpack: shown without the internet too
 
 **`/update` — Firmware update**
 - The firmware's version (release and build)
