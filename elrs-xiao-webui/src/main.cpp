@@ -44,6 +44,7 @@ static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラ�
 // Lap Timer, its TCP session ends at once (keepalive alone takes ~11 s).
 static volatile bool g_apLeftEvent = false;
 static uint8_t       g_apLeftMac[6];
+static volatile bool g_apJoinEvent = false;   // a device joined our WiFi (event task → loop)
 
 static bool     g_tcpSessionActive  = false;  // 現在 TCP セッション中か
 static bool     g_tcpEverConnected  = false;  // 一度でも TCP 接続したか
@@ -74,6 +75,10 @@ static bool     g_hostActive = false;   // host mode running
 static String   g_hostSsid   = HOST_SSID_DEFAULT;
 static String   g_hostPass   = HOST_PASS_DEFAULT;
 static uint8_t  g_hostCh     = HOST_CH_DEFAULT;
+static uint8_t  g_hostPhones = HOST_PHONES_DEFAULT;   // phones / PCs besides FPV C5 Lap Timer
+static uint8_t  g_lapMac[6];                          // FPV C5 Lap Timer's (learned from its TCP)
+static bool     g_lapMacKnown = false;
+static bool isLapTimer(const uint8_t *mac);
 static bool     g_tetherEn   = false;   // USB tethering (host mode only)
 
 // Client mode: up to 5 networks (as the timer), joined as selected or, with
@@ -436,7 +441,16 @@ static String statusCard()
     if (g_hostActive) {
         wifi_sta_list_t sl = {};
         esp_wifi_ap_get_sta_list(&sl);
-        p += L("Devices on this WiFi: ", "この WiFi の機器："); p += String(sl.num); p += "<br>";
+        int others = 0;
+        bool lapIn = false;
+        for (int i = 0; i < sl.num; i++) {
+            if (isLapTimer(sl.sta[i].mac)) lapIn = true;
+            else others++;
+        }
+        snprintf(b, sizeof b, "%s%d%s%d / %d%s", L("Devices on this WiFi: ", "この WiFi の機器："), sl.num,
+                 lapIn ? L(" (FPV C5 Lap Timer + phones/PCs ", "（FPV C5 Lap Timer ＋ スマホ・PC ") : L(" (phones/PCs ", "（スマホ・PC "),
+                 others, g_hostPhones, L(")", "）"));
+        p += b; p += "<br>";
         esp_netif_pair_mac_ip_t pairs[HOST_MAX_STA] = {};
         int n = sl.num < HOST_MAX_STA ? sl.num : HOST_MAX_STA;
         for (int i = 0; i < n; i++) memcpy(pairs[i].mac, sl.sta[i].mac, 6);
@@ -529,9 +543,21 @@ static String pageWifi(const String &msg = "")
         p += ">"; p += String(c); p += " ch</option>";
     }
     p += "</select></label>";
+    p += "<label>"; p += L("Phones / PCs (besides FPV C5 Lap Timer)", "スマホ・PC の接続台数（FPV C5 Lap Timer とは別）"); p += "<select name='hmax'>";
+    for (int c = 1; c <= HOST_PHONES_MAX; c++) {
+        p += "<option value='"; p += String(c); p += "'"; if (c == g_hostPhones) p += " selected";
+        p += ">"; p += String(c); p += L("", " 台"); if (c == HOST_PHONES_DEFAULT) p += L(" (default)", "（初期値）"); p += "</option>";
+    }
+    p += "</select></label>";
     p += "<div class='note'>";
-    p += L("FPV C5 Lap Timer joins this WiFi in client mode (its netpack address: auto). Phones open it from its link at the top. Up to 10 devices, FPV C5 Lap Timer included.",
-           "FPV C5 Lap Timer はクライアントモードでこの WiFi に接続します（netpack アドレスは auto）。スマホからは、上の「FPV C5 Lap Timer」のリンクで画面を開けます。接続は FPV C5 Lap Timer を含めて 10 台まで。");
+    p += L("A limit for use as a bridge: one place is always kept free for FPV C5 Lap Timer, and the phones / PCs are few (settings, a look at FPV C5 Lap Timer). "
+           "One more is sent off and kept out for 30 s. Raise it for a crowd watching on the netpack's WiFi.",
+           "ブリッジとして使うための制限です。FPV C5 Lap Timer の 1 台分はいつも空けておき、スマホ・PC は少なめ（設定や FPV C5 Lap Timer の画面を見る程度）にします。"
+           "上限を超えてつないだ機器は外し、30 秒間は入れません。netpack の WiFi で大勢が観戦するときは増やしてください。");
+    p += "</div>";
+    p += "<div class='note'>";
+    p += L("FPV C5 Lap Timer joins this WiFi in client mode (its netpack address: auto). Phones open it from its link at the top. ",
+           "FPV C5 Lap Timer はクライアントモードでこの WiFi に接続します（netpack アドレスは auto）。スマホからは、上の「FPV C5 Lap Timer」のリンクで画面を開けます。");
     p += "</div>";
     p += "<div class='chk'><input type='checkbox' name='tether' value='1'"; if (g_tetherEn) p += " checked";
     p += "><span>"; p += L("USB tethering: a phone on the USB port takes this WiFi to the internet", "USB テザリング：USB につないだスマホから、この WiFi をインターネットへ"); p += "</span></div>";
@@ -699,9 +725,10 @@ static void startHost()
     WiFi.mode(WIFI_AP);
     esp_wifi_set_max_tx_power(84);
     const char *pass = g_hostPass.length() >= 8 ? g_hostPass.c_str() : HOST_PASS_DEFAULT;
-    if (!WiFi.softAP(g_hostSsid.c_str(), pass, g_hostCh, 0, HOST_MAX_STA)) {
+    int maxSta = g_hostPhones + 1;   // FPV C5 Lap Timer + phones / PCs
+    if (!WiFi.softAP(g_hostSsid.c_str(), pass, g_hostCh, 0, maxSta)) {
         LOG.printf("[host] ch %u refused — ch %u\n", g_hostCh, HOST_CH_DEFAULT);
-        WiFi.softAP(g_hostSsid.c_str(), pass, HOST_CH_DEFAULT, 0, HOST_MAX_STA);
+        WiFi.softAP(g_hostSsid.c_str(), pass, HOST_CH_DEFAULT, 0, maxSta);
     }
     IPAddress ip(192, 168, 4, 1);
     WiFi.softAPConfig(ip, ip, IPAddress(255, 255, 255, 0), IPAddress(192, 168, 4, 2), ip);   // DNS: our relay
@@ -723,6 +750,83 @@ static void startHost()
         }
     }
     beepDouble();
+}
+
+// Host mode: at most g_hostPhones devices besides FPV C5 Lap Timer, so its
+// place is always free (the access point takes g_hostPhones + 1). A device
+// past the limit is sent off and kept out for 30 s (it would join again at
+// once). FPV C5 Lap Timer is known by the MAC its TCP came from.
+static const uint32_t HOLD_OFF_MS = 30000;
+static struct { uint8_t mac[6]; uint32_t since; bool used; } g_held[4];
+
+static void learnLapMac()
+{
+    if (!g_hostActive || !tcpClient || !tcpClient.connected()) return;
+    uint32_t ip = (uint32_t)tcpClient.remoteIP();
+    wifi_sta_list_t sl = {};
+    if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK || !sl.num) return;
+    esp_netif_pair_mac_ip_t pairs[HOST_MAX_STA] = {};
+    int n = sl.num < HOST_MAX_STA ? sl.num : HOST_MAX_STA;
+    for (int i = 0; i < n; i++) memcpy(pairs[i].mac, sl.sta[i].mac, 6);
+    if (esp_netif_dhcps_get_clients_by_mac(WiFi.AP.netif(), n, pairs) != ESP_OK) return;
+    for (int i = 0; i < n; i++) {
+        if (pairs[i].ip.addr != ip) continue;
+        if (!g_lapMacKnown || memcmp(g_lapMac, pairs[i].mac, 6)) {
+            memcpy(g_lapMac, pairs[i].mac, 6);
+            g_lapMacKnown = true;
+            prefs.begin("elrs", false);
+            prefs.putBytes("lapMac", g_lapMac, 6);
+            prefs.end();
+            LOG.printf("[host] FPV C5 Lap Timer is " MACSTR "\n", MAC2STR(g_lapMac));
+        }
+        return;
+    }
+}
+
+static bool isLapTimer(const uint8_t *mac) { return g_lapMacKnown && memcmp(mac, g_lapMac, 6) == 0; }
+
+static void sendOff(const uint8_t *mac, const char *why)
+{
+    uint16_t aid = 0;
+    if (esp_wifi_ap_get_sta_aid(mac, &aid) != ESP_OK || !aid) return;
+    LOG.printf("[host] " MACSTR " sent off (%s)\n", MAC2STR(mac), why);
+    esp_wifi_deauth_sta(aid);
+}
+
+static void limitDevices()
+{
+    static uint32_t last = 0;
+    uint32_t now = millis();
+    bool joined = g_apJoinEvent;
+    if (!g_hostActive || (!joined && now - last < 3000)) return;
+    g_apJoinEvent = false;
+    last = now;
+    wifi_sta_list_t sl = {};
+    if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK) return;
+    // Held devices that joined again: out again while the hold lasts.
+    for (int i = 0; i < sl.num; i++)
+        for (auto &h : g_held)
+            if (h.used && now - h.since < HOLD_OFF_MS && memcmp(h.mac, sl.sta[i].mac, 6) == 0)
+                sendOff(sl.sta[i].mac, "held");
+    for (auto &h : g_held)
+        if (h.used && now - h.since >= HOLD_OFF_MS) h.used = false;
+    // Over the limit: the newest devices go (the list is in join order).
+    // Until FPV C5 Lap Timer is known (its first TCP here), the access
+    // point's own limit (phones + 1) does it: it might be the newest.
+    if (!g_lapMacKnown) return;
+    int others = 0;
+    for (int i = 0; i < sl.num; i++)
+        if (!isLapTimer(sl.sta[i].mac) && ++others > g_hostPhones) {
+            int slot = 0;
+            for (int k = 0; k < 4; k++) {
+                if (!g_held[k].used) { slot = k; break; }
+                if ((int32_t)(g_held[k].since - g_held[slot].since) < 0) slot = k;
+            }
+            memcpy(g_held[slot].mac, sl.sta[i].mac, 6);
+            g_held[slot].since = now;
+            g_held[slot].used = true;
+            sendOff(sl.sta[i].mac, "more phones / PCs than set");
+        }
 }
 
 static void wifiConnect()
@@ -884,6 +988,8 @@ static void handleWifiPost()
     String  hssid  = webServer.arg("hssid");
     String  hpass  = webServer.arg("hpass");
     int     hch    = webServer.arg("hch").toInt();
+    int     hmax   = webServer.arg("hmax").toInt();
+    if (hmax < 1 || hmax > HOST_PHONES_MAX) hmax = HOST_PHONES_DEFAULT;
     bool    tether = webServer.hasArg("tether");
     hssid.trim();
     if (hch < 6 || hch > 11) hch = HOST_CH_DEFAULT;
@@ -931,7 +1037,7 @@ static void handleWifiPost()
     // WiFi and the USB port start afresh). The client's network alone:
     // join it now, as before.
     bool restart = mode != g_netMode || tether != g_tetherEn ||
-                   (mode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh));
+                   (mode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh || hmax != g_hostPhones));
     prefs.begin("elrs", false);
     for (int i = 0; i < STA_NETS; i++) {
         g_staSsid[i] = ns[i];
@@ -956,12 +1062,14 @@ static void handleWifiPost()
     prefs.putString("hSsid", hssid.length() ? hssid : g_hostSsid);
     if (hpass.length()) prefs.putString("hPass", hpass);
     prefs.putUChar("hCh", hch);
+    prefs.putUChar("hMax", hmax);
     prefs.putBool("tether", tether);
     prefs.end();
     g_netMode = mode;
     if (hssid.length()) g_hostSsid = hssid;
     if (hpass.length()) g_hostPass = hpass;
     g_hostCh = hch;
+    g_hostPhones = hmax;
 
     if (restart) {
         String p = htmlHead(L("WiFi Settings", "WiFi設定"));
@@ -1046,6 +1154,9 @@ static void loadPrefs()
     g_hostCh           = prefs.getUChar("hCh",        HOST_CH_DEFAULT);
     g_tetherEn         = prefs.getBool("tether",      false);
     if (g_hostCh < 6 || g_hostCh > 11) g_hostCh = HOST_CH_DEFAULT;
+    g_hostPhones       = prefs.getUChar("hMax",       HOST_PHONES_DEFAULT);
+    if (g_hostPhones < 1 || g_hostPhones > HOST_PHONES_MAX) g_hostPhones = HOST_PHONES_DEFAULT;
+    g_lapMacKnown      = prefs.getBytes("lapMac", g_lapMac, 6) == 6;
     if (!g_hostSsid.length()) g_hostSsid = HOST_SSID_DEFAULT;
     if (prefs.getBool("nets", false)) {
         for (int i = 0; i < STA_NETS; i++) {
@@ -1169,6 +1280,8 @@ void setup()
     loadPrefs();
 
     // WiFi 切断を即座に検知してフラグを立てる（loop() 先頭で FIN 送信）
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { g_apJoinEvent = true; }, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
         memcpy(g_apLeftMac, info.wifi_ap_stadisconnected.mac, 6);
         g_apLeftEvent = true;
@@ -1216,6 +1329,7 @@ void loop()
     updateWifiBuzzer();
     if (apModeActive) dnsServer.processNextRequest();
     if (g_hostActive) dnsRelayPoll();
+    limitDevices();
     webServer.handleClient();
     updateLed();
     updateVoltage();
@@ -1262,6 +1376,7 @@ void loop()
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
             LOG.println("[tcp] session started");
+            learnLapMac();
             beepShort();
         }
     }

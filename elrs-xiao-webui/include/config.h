@@ -46,3 +46,9 @@
 #define HOST_PASS_DEFAULT  "elrs-netpack"
 #define HOST_CH_DEFAULT    6
 #define HOST_MAX_STA       10
+
+// Host mode, devices besides FPV C5 Lap Timer (phones, PCs): the netpack is
+// a bridge, so few (settings, a look at the timer). One more place is kept
+// for FPV C5 Lap Timer at all times.
+#define HOST_PHONES_DEFAULT 2
+#define HOST_PHONES_MAX     (HOST_MAX_STA - 1)

@@ -183,7 +183,10 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 - When no network can be joined, the setup WiFi (`ELRS-NETpack-Setup`) comes up and the netpack retries every 15 s. When a joined network drops, it reconnects every 10 s and brings the setup WiFi up after 60 s.
 - The network saved by v2.2.x becomes the first one.
 
-**Host mode**: SSID, password (8-63 characters), channel (6-11). Up to 10 devices, FPV C5 Lap Timer included.
+**Host mode**: SSID, password (8-63 characters), channel (6-11), **phones / PCs** (1-9, default 2) (v2.3.0).
+- A limit for use as a bridge: **one place is always kept free for FPV C5 Lap Timer**; phones / PCs up to the number set (default 2: settings, a look at FPV C5 Lap Timer).
+- One more is sent off and kept out for 30 s. FPV C5 Lap Timer is known as the device its OSD connection (TCP) came from (once seen, it can always join).
+- Raise it for a crowd watching on the netpack's WiFi (10 devices in all at most).
 
 **USB tethering**: on / off (host mode only).
 
@@ -201,7 +204,7 @@ Changing the connection, the host's WiFi or tethering restarts the netpack after
 2. The settings page is at `http://192.168.4.1/` (or `http://elrs-netpack.local/`).
 3. Put FPV C5 Lap Timer in **client mode** with this SSID and password. Leave its netpack address at `auto`: it finds the netpack as `elrs-netpack.local`.
 4. Phones join the same WiFi; the "**FPV C5 Lap Timer**" link at the top of the netpack's page opens its screen (the MSP peer, or `fpv-c5-lt.local` found on the same WiFi).
-5. Up to **10 devices**, FPV C5 Lap Timer included. The page lists the devices on the WiFi with their signal.
+5. Phones / PCs **up to the number set** (default 2); one more place is always free for FPV C5 Lap Timer. The page lists the devices on the WiFi with their signal.
 6. To go back, pick "Client" and save.
 
 **USB tethering** (host mode only)
@@ -270,7 +273,7 @@ Settings → ELRS Backpack General
 | TCP MSP bridge | TCP 8080 ⇄ UART; a new connection replaces the old one (FPV C5 Lap Timer restarted or rejoined) |
 | Web settings | WiFi, voltage and update pages; Japanese / English |
 | WiFi (client) | 5 networks (selected / automatic), fixed address, setup WiFi (captive portal) when none can be joined |
-| WiFi (host) | The netpack's own WiFi (SSID, password, ch 6-11), up to 10 devices, DNS relay |
+| WiFi (host) | The netpack's own WiFi (SSID, password, ch 6-11), FPV C5 Lap Timer + phones / PCs (1-9, default 2), DNS relay |
 | USB tethering | In host mode, to the internet through an Android phone (RNDIS / NCM / ECM, NAPT) |
 | mDNS | `elrs-netpack.local` (web and TCP) |
 | Firmware update | Online (GitHub release) or from a file |
@@ -355,6 +358,8 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 | `hSsid` | String | `ELRS-NETpack` | Host mode SSID |
 | `hPass` | String | `elrs-netpack` | Host mode password |
 | `hCh` | UChar | 6 | Host mode channel (6-11) |
+| `hMax` | UChar | 2 | Host mode phones / PCs (1-9, besides FPV C5 Lap Timer) |
+| `lapMac` | Bytes | — | FPV C5 Lap Timer's MAC (learned from its OSD connection; never sent off by the limit) |
 | `tether` | Bool | false | USB tethering (host mode only) |
 | `vbatRatio` | Float | 2.0 | Voltage divider ratio |
 | `alarmV` | Float | 3.5 | Alarm threshold (V) |
