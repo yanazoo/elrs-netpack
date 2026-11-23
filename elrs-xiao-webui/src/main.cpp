@@ -46,6 +46,8 @@ static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラ�
 static volatile bool g_apLeftEvent = false;
 static uint8_t       g_apLeftMac[6];
 static volatile bool g_apJoinEvent = false;   // a device joined our WiFi (event task → loop)
+static volatile uint32_t g_apJoinMs = 0, g_ipLogIp = 0, g_ipLogMs = 0;
+static volatile bool g_ipLogEvent = false;
 
 static bool     g_tcpSessionActive  = false;  // 現在 TCP セッション中か
 static bool     g_tcpEverConnected  = false;  // 一度でも TCP 接続したか
@@ -738,6 +740,30 @@ static int udpSocket(uint16_t port)
     return s;
 }
 
+// Turns the query in buf into an answer: A → 192.168.4.1, anything else
+// (AAAA, ...) → no records. Length of the answer, or 0.
+static int dnsAnswerSelf(uint8_t *buf, int n, int cap)
+{
+    if (n < 12 || (buf[2] & 0x80) || buf[4] != 0 || buf[5] != 1) return 0;   // one question
+    int q = 12;
+    while (q < n && buf[q]) {
+        if ((buf[q] & 0xC0) || q + buf[q] + 1 >= n) return 0;
+        q += buf[q] + 1;
+    }
+    q += 1;                       // the name's end
+    if (q + 4 > n) return 0;
+    uint16_t qtype = (buf[q] << 8) | buf[q + 1], qclass = (buf[q + 2] << 8) | buf[q + 3];
+    q += 4;                       // the question ends here (anything after it is dropped)
+    buf[2] = 0x84 | (buf[2] & 0x01);   // response, authoritative, RD as asked
+    buf[3] = 0x80;                     // RA, no error
+    buf[6] = buf[7] = buf[8] = buf[9] = buf[10] = buf[11] = 0;
+    if (qtype != 1 || qclass != 1 || q + 16 > cap) return q;   // no records
+    buf[7] = 1;                        // one answer
+    const uint8_t ans[16] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4, 192, 168, 4, 1};
+    memcpy(buf + q, ans, sizeof ans);
+    return q + 16;
+}
+
 static void dnsRelayBegin()
 {
     if (g_dnsSock < 0) g_dnsSock = udpSocket(53);
@@ -757,9 +783,12 @@ static void dnsRelayPoll()
         TetherInfo t;
         tetherInfo(&t);
         if (t.state != TetherState::Up) {
-            buf[2] |= 0x80;                       // a response
-            buf[3] = (buf[3] & 0xF0) | 0x02;      // SERVFAIL
-            sendto(g_dnsSock, buf, n, 0, (sockaddr *)&from, fl);
+            // No way out: every name is us (as FPV C5 Lap Timer's access
+            // point does). A computer's "is there internet?" check then gets
+            // its answer at once; with "server failure" Windows kept asking
+            // and sat on "checking network requirements" for a long time.
+            int m = dnsAnswerSelf(buf, n, sizeof buf);
+            if (m > 0) sendto(g_dnsSock, buf, m, 0, (sockaddr *)&from, fl);
             continue;
         }
         int slot = -1;
@@ -801,12 +830,16 @@ static void startHost()
     esp_wifi_set_max_tx_power(84);
     const char *pass = g_hostPass.length() >= 8 ? g_hostPass.c_str() : HOST_PASS_DEFAULT;
     int maxSta = g_hostPhones + 1;   // FPV C5 Lap Timer + phones / PCs
+    // As FPV C5 Lap Timer's access point: the address and DHCP first, then
+    // the WiFi (set the other way round, DHCP restarted under a running AP).
+    IPAddress ip(192, 168, 4, 1);
+    WiFi.softAPConfig(ip, ip, IPAddress(255, 255, 255, 0), IPAddress(192, 168, 4, 2), ip);   // DNS: our relay
     if (!WiFi.softAP(g_hostSsid.c_str(), pass, g_hostCh, 0, maxSta)) {
         LOG.printf("[host] ch %u refused — ch %u\n", g_hostCh, HOST_CH_DEFAULT);
         WiFi.softAP(g_hostSsid.c_str(), pass, HOST_CH_DEFAULT, 0, maxSta);
     }
-    IPAddress ip(192, 168, 4, 1);
-    WiFi.softAPConfig(ip, ip, IPAddress(255, 255, 255, 0), IPAddress(192, 168, 4, 2), ip);   // DNS: our relay
+    // 20 MHz wide: 40 MHz covers the neighbouring channels for no gain.
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
     apModeActive = false;
     g_hostActive = true;
     builtinLed.off();
@@ -1355,7 +1388,17 @@ void setup()
     loadPrefs();
 
     // WiFi 切断を即座に検知してフラグを立てる（loop() 先頭で FIN 送信）
-    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { g_apJoinEvent = true; }, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
+        g_apJoinEvent = true;
+        g_apJoinMs = millis();
+    }, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+    // How long a device waited for its address (a slow "checking network
+    // requirements" on a PC shows here).
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+        g_ipLogIp = info.wifi_ap_staipassigned.ip.addr;
+        g_ipLogMs = millis() - g_apJoinMs;
+        g_ipLogEvent = true;
+    }, ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED);
 
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
         memcpy(g_apLeftMac, info.wifi_ap_stadisconnected.mac, 6);
@@ -1406,6 +1449,11 @@ void loop()
     if (apModeActive) dnsServer.processNextRequest();
     if (g_hostActive) dnsRelayPoll();
     limitDevices();
+    if (g_ipLogEvent) {
+        g_ipLogEvent = false;
+        LOG.printf("[host] address " IPSTR " given %lu ms after joining\n", IP2STR((esp_ip4_addr_t *)&g_ipLogIp),
+                   (unsigned long)g_ipLogMs);
+    }
     webServer.handleClient();
     updateLed();
     updateVoltage();
