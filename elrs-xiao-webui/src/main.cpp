@@ -7,6 +7,11 @@
 #include <DNSServer.h>
 #include "esp_wifi.h"
 #include <lwip/sockets.h>
+#include <Update.h>
+#include "esp_netif.h"
+#include "usb_tether.h"
+#include "fw_update.h"
+#include "log.h"
 #include "config.h"
 #include "led.h"
 #include "msp.h"
@@ -54,6 +59,18 @@ static bool     g_buzzerEnabled  = true;
 static bool     g_ledEnabled     = true;
 static bool     g_vbatAlarmEnabled = false;  // デフォルト OFF（バッテリー未接続時の誤発報防止）
 static bool     g_langJa         = true;
+
+Print *g_log = &Serial;
+
+// Host mode: the netpack's own WiFi. The timer (client mode) and the phones
+// join it; the MSP from the timer goes on to the ESP-NOW bridge as ever.
+// With USB tethering, a phone on the USB port takes it out to the internet.
+static uint8_t  g_netMode    = 0;       // 0 = client (joins a WiFi), 1 = host
+static bool     g_hostActive = false;   // host mode running
+static String   g_hostSsid   = HOST_SSID_DEFAULT;
+static String   g_hostPass   = HOST_PASS_DEFAULT;
+static uint8_t  g_hostCh     = HOST_CH_DEFAULT;
+static bool     g_tetherEn   = false;   // USB tethering (host mode only)
 
 // ── i18n helper ───────────────────────────────────────────────────────────────
 
@@ -209,6 +226,11 @@ static void handlePacketFromUart(mspPacket_t *pkt)
 
 static String rssiBar()
 {
+    if (g_hostActive) {
+        char hb[48];
+        snprintf(hb, sizeof hb, "%s ch%u · %d", L("Host", "ホスト"), g_hostCh, WiFi.softAPgetStationNum());
+        return String(hb);
+    }
     if (apModeActive)
         return L("AP Mode", "APモード");
     if (WiFi.status() != WL_CONNECTED)
@@ -263,12 +285,19 @@ static String htmlHead(const char *title)
          ".card{background:#212121;border:1px solid #2e2e2e;border-radius:8px;"
          "padding:14px 18px;margin:10px 0}"
          ".volt{font-size:2em;color:#f0f0f0;font-weight:300;letter-spacing:1px}"
+         ".st{font-size:.86em;line-height:1.6}.st a{color:#5b9bd5}"
+         ".note{font-size:.78em;color:#777;margin-top:6px;line-height:1.5}"
+         "select{width:100%;padding:8px 10px;background:#212121;border:1px solid #383838;"
+         "border-radius:5px;color:#ddd;margin-top:4px;font-size:.95em}"
+         ".radio{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:.9em}"
+         ".radio input{width:auto;accent-color:#5b9bd5}"
          "</style></head><body>";
     h += "<div class='topbar'><h1>ELRS Netpack</h1>";
     h += "<span class='rssi'>"; h += rssiBar(); h += "</span></div>";
     h += "<nav>";
     h += "<a href='/wifi'>WiFi</a>";
     h += "<a href='/voltage'>"; h += L("Voltage", "電圧"); h += "</a>";
+    h += "<a href='/update'>"; h += L("Update", "更新"); h += "</a>";
     h += "<a class='lang' href='/lang'>"; h += (g_langJa ? "EN" : "JA"); h += "</a>";
     h += "</nav><hr>";
     return h;
@@ -301,19 +330,105 @@ static String nvsSsid()
     return s;
 }
 
+// What the netpack is doing now: its WiFi, who sends it MSP (the timer:
+// a link to its page), the devices on its WiFi, the USB tethering.
+static String statusCard()
+{
+    String p = "<div class='card st'>";
+    char b[96];
+    if (g_hostActive) {
+        snprintf(b, sizeof b, "%s ch%u", htmlEsc(g_hostSsid).c_str(), g_hostCh);
+        p += L("Host mode: ", "ホストモード："); p += b; p += "（192.168.4.1）<br>";
+    } else if (apModeActive) {
+        p += L("Setup AP (the saved WiFi is not found)", "設定用 AP（保存した WiFi が見つかりません）"); p += "<br>";
+    } else if (WiFi.status() == WL_CONNECTED) {
+        p += L("Client mode: ", "クライアントモード："); p += htmlEsc(WiFi.SSID());
+        p += "（"; p += WiFi.localIP().toString(); p += "）<br>";
+    }
+    if (tcpClient && tcpClient.connected()) {
+        String ip = tcpClient.remoteIP().toString();
+        p += L("MSP from ", "MSP の接続元："); p += ip;
+        p += " — <a href='http://"; p += ip; p += "/' target='_blank'>"; p += L("open the timer", "タイマーを開く"); p += "</a><br>";
+    } else {
+        p += L("MSP: not connected", "MSP：未接続"); p += "<br>";
+    }
+    if (g_hostActive) {
+        wifi_sta_list_t sl = {};
+        esp_wifi_ap_get_sta_list(&sl);
+        p += L("Devices on this WiFi: ", "この WiFi の機器："); p += String(sl.num); p += "<br>";
+        esp_netif_pair_mac_ip_t pairs[HOST_MAX_STA] = {};
+        int n = sl.num < HOST_MAX_STA ? sl.num : HOST_MAX_STA;
+        for (int i = 0; i < n; i++) memcpy(pairs[i].mac, sl.sta[i].mac, 6);
+        if (n) esp_netif_dhcps_get_clients_by_mac(WiFi.AP.netif(), n, pairs);
+        for (int i = 0; i < n; i++) {
+            snprintf(b, sizeof b, "・" IPSTR "（%d dBm）<br>", IP2STR(&pairs[i].ip), sl.sta[i].rssi);
+            p += b;
+        }
+        if (g_tetherEn) {
+            TetherInfo t;
+            tetherInfo(&t);
+            p += L("USB tethering: ", "USB テザリング："); p += tetherStateText(t.state, g_langJa);
+            if (t.product[0]) { p += "（"; p += htmlEsc(t.product); if (t.proto[0]) { p += " / "; p += t.proto; } p += "）"; }
+            if (t.state == TetherState::Up) {
+                snprintf(b, sizeof b, "<br>・" IPSTR " / DNS " IPSTR, IP2STR(&t.ip.ip), IP2STR(&t.dns));
+                p += b;
+            }
+            p += "<br>";
+        }
+    }
+    p += L("Firmware ", "ファーム "); p += fwVersion(); p += "（"; p += fwBuild(); p += "）— <a href='/update'>"; p += L("update", "更新"); p += "</a>";
+    p += "</div>";
+    return p;
+}
+
+static String nvsHostPassSet()
+{
+    return g_hostPass.length() ? L("(set; leave blank to keep)", "(設定済み。変更しない場合は空欄)") : "";
+}
+
 static String pageWifi(const String &msg = "")
 {
     String p = htmlHead(L("WiFi Settings", "WiFi設定"));
-    p += "<h2>"; p += L("WiFi Settings", "WiFi設定"); p += "</h2>";
+    p += statusCard();
     if (msg.length()) { p += "<div class='msg'>"; p += msg; p += "</div>"; }
     p += "<form method='POST' action='/wifi'>";
-    p += "<label>SSID<input type='text' name='ssid' value='";
+    p += "<h2>"; p += L("Connection", "接続方式"); p += "</h2>";
+    p += "<label class='radio'><input type='radio' name='mode' value='0'"; if (g_netMode == 0) p += " checked";
+    p += ">"; p += L("Client: join a WiFi (the timer's or a router's)", "クライアント：WiFi に接続（タイマーやルーター）"); p += "</label>";
+    p += "<label class='radio'><input type='radio' name='mode' value='1'"; if (g_netMode == 1) p += " checked";
+    p += ">"; p += L("Host: the netpack's own WiFi (the timer and phones join it)", "ホスト：netpack が WiFi を出す（タイマーやスマホが接続）"); p += "</label>";
+
+    p += "<h2>"; p += L("Client", "クライアント"); p += "</h2>";
+    p += "<label>SSID<input type='text' name='ssid' autocomplete='off' value='";
     p += htmlEsc(nvsSsid()); p += "'></label>";
     p += "<label>"; p += L("Password", "パスワード");
-    p += "<input type='password' name='pass' placeholder='";
+    p += "<input type='password' name='pass' autocomplete='new-password' placeholder='";
     p += L("(leave blank to keep)", "(変更しない場合は空欄)");
     p += "'></label>";
-    p += "<button type='submit'>"; p += L("Save &amp; Connect", "保存して接続"); p += "</button>";
+
+    p += "<h2>"; p += L("Host", "ホスト"); p += "</h2>";
+    p += "<label>SSID<input type='text' name='hssid' autocomplete='off' maxlength='32' value='";
+    p += htmlEsc(g_hostSsid); p += "'></label>";
+    p += "<label>"; p += L("Password (8-63 characters)", "パスワード（8〜63 文字）");
+    p += "<input type='password' name='hpass' autocomplete='new-password' maxlength='63' placeholder='";
+    p += nvsHostPassSet(); p += "'></label>";
+    p += "<label>"; p += L("Channel", "チャンネル"); p += "<select name='hch'>";
+    for (int c = 6; c <= 11; c++) {
+        p += "<option value='"; p += String(c); p += "'"; if (c == g_hostCh) p += " selected";
+        p += ">"; p += String(c); p += " ch</option>";
+    }
+    p += "</select></label>";
+    p += "<div class='note'>";
+    p += L("The timer joins this WiFi in client mode (its netpack address: auto). Phones open the timer at its address shown above. Up to 10 devices, the timer included.",
+           "タイマーはクライアントモードでこの WiFi に接続します（netpack アドレスは auto）。スマホからは上の「タイマーを開く」でタイマーの画面を開けます。接続はタイマーを含めて 10 台まで。");
+    p += "</div>";
+    p += "<div class='chk'><input type='checkbox' name='tether' value='1'"; if (g_tetherEn) p += " checked";
+    p += "><span>"; p += L("USB tethering: a phone on the USB port takes this WiFi to the internet", "USB テザリング：USB につないだスマホから、この WiFi をインターネットへ"); p += "</span></div>";
+    p += "<div class='note'>";
+    p += L("Host mode only. Android: turn on Settings → Network → Hotspot &amp; tethering → USB tethering. While on, the USB port is not a serial port: update from the Update page (or hold BOOT while plugging in).",
+           "ホストモードのときだけ動きます。Android は「設定 → ネットワーク → テザリング → USB テザリング」を ON。ON の間は USB でのシリアル・書き込みはできません（書き込みは「更新」ページ、または BOOT を押しながら USB を接続）。");
+    p += "</div>";
+    p += "<button type='submit'>"; p += L("Save", "保存"); p += "</button>";
     p += "</form></body></html>";
     return p;
 }
@@ -379,7 +494,7 @@ static void startCaptivePortal()
     apModeActive = true;
     builtinLed.blink(LED_AP_INTERVAL, LED_AP_INTERVAL);
     dnsServer.start(53, "*", WiFi.softAPIP());
-    Serial.printf("[ap] IP=%s\n", WiFi.softAPIP().toString().c_str());
+    LOG.printf("[ap] IP=%s\n", WiFi.softAPIP().toString().c_str());
 }
 
 static void startNetServices()
@@ -390,7 +505,117 @@ static void startNetServices()
         MDNS.addService("http",  "_tcp", 80);
     }
     tcpServer.begin();
-    Serial.printf("[tcp] listening on port %d\n", TCP_PORT);
+    LOG.printf("[tcp] listening on port %d\n", TCP_PORT);
+}
+
+// ── Host mode ─────────────────────────────────────────────────────────────────
+
+// DNS for the devices on the netpack's WiFi (DHCP gives them 192.168.4.1):
+// passed on to the phone's DNS while USB tethering is up, else answered
+// "server failure" at once (no internet: the phone stops waiting).
+static int g_dnsSock = -1, g_dnsUp = -1;
+static struct DnsPend { uint16_t id, orig; sockaddr_in from; uint32_t ms; bool used; } g_dnsPend[16];
+static uint16_t g_dnsNextId = 1;
+
+static int udpSocket(uint16_t port)
+{
+    int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0) return -1;
+    sockaddr_in a = {};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(s, (sockaddr *)&a, sizeof a) < 0) { close(s); return -1; }
+    fcntl(s, F_SETFL, O_NONBLOCK);
+    return s;
+}
+
+static void dnsRelayBegin()
+{
+    if (g_dnsSock < 0) g_dnsSock = udpSocket(53);
+    if (g_dnsUp < 0) g_dnsUp = udpSocket(0);
+}
+
+static void dnsRelayPoll()
+{
+    if (g_dnsSock < 0 || g_dnsUp < 0) return;
+    uint8_t buf[512];
+    uint32_t now = millis();
+    for (int k = 0; k < 4; k++) {   // queries from the WiFi
+        sockaddr_in from;
+        socklen_t fl = sizeof from;
+        int n = recvfrom(g_dnsSock, buf, sizeof buf, 0, (sockaddr *)&from, &fl);
+        if (n < 12) break;
+        TetherInfo t;
+        tetherInfo(&t);
+        if (t.state != TetherState::Up) {
+            buf[2] |= 0x80;                       // a response
+            buf[3] = (buf[3] & 0xF0) | 0x02;      // SERVFAIL
+            sendto(g_dnsSock, buf, n, 0, (sockaddr *)&from, fl);
+            continue;
+        }
+        int slot = -1;
+        for (int i = 0; i < 16; i++)
+            if (!g_dnsPend[i].used || now - g_dnsPend[i].ms > 5000) { slot = i; break; }
+        if (slot < 0) continue;
+        DnsPend &d = g_dnsPend[slot];
+        d.used = true; d.ms = now; d.from = from;
+        d.orig = (buf[0] << 8) | buf[1];
+        d.id = g_dnsNextId++;
+        buf[0] = d.id >> 8; buf[1] = d.id;
+        sockaddr_in up = {};
+        up.sin_family = AF_INET;
+        up.sin_port = htons(53);
+        up.sin_addr.s_addr = t.dns.addr ? t.dns.addr : inet_addr("8.8.8.8");
+        sendto(g_dnsUp, buf, n, 0, (sockaddr *)&up, sizeof up);
+    }
+    for (int k = 0; k < 4; k++) {   // answers from the phone's DNS
+        int n = recv(g_dnsUp, buf, sizeof buf, 0);
+        if (n < 12) break;
+        uint16_t id = (buf[0] << 8) | buf[1];
+        for (int i = 0; i < 16; i++) {
+            DnsPend &d = g_dnsPend[i];
+            if (!d.used || d.id != id) continue;
+            buf[0] = d.orig >> 8; buf[1] = d.orig;
+            sendto(g_dnsSock, buf, n, 0, (sockaddr *)&d.from, sizeof d.from);
+            d.used = false;
+            break;
+        }
+    }
+}
+
+static void startHost()
+{
+    if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
+    dnsServer.stop();
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_AP);
+    esp_wifi_set_max_tx_power(84);
+    const char *pass = g_hostPass.length() >= 8 ? g_hostPass.c_str() : HOST_PASS_DEFAULT;
+    if (!WiFi.softAP(g_hostSsid.c_str(), pass, g_hostCh, 0, HOST_MAX_STA)) {
+        LOG.printf("[host] ch %u refused — ch %u\n", g_hostCh, HOST_CH_DEFAULT);
+        WiFi.softAP(g_hostSsid.c_str(), pass, HOST_CH_DEFAULT, 0, HOST_MAX_STA);
+    }
+    IPAddress ip(192, 168, 4, 1);
+    WiFi.softAPConfig(ip, ip, IPAddress(255, 255, 255, 0), IPAddress(192, 168, 4, 2), ip);   // DNS: our relay
+    apModeActive = false;
+    g_hostActive = true;
+    builtinLed.off();
+    LOG.printf("[host] WiFi %s ch %u  IP=%s\n", g_hostSsid.c_str(), g_hostCh, WiFi.softAPIP().toString().c_str());
+    startNetServices();
+    dnsRelayBegin();
+    if (g_tetherEn) {
+        // The USB port becomes the host's: the log moves to UART0 (D6).
+        LOG.println("[host] USB tethering on: the log continues on D6 (UART0 TX, 115200)");
+        Serial.flush();
+        Serial.end();
+        Serial0.begin(115200);
+        g_log = &Serial0;
+        if (tetherBegin()) {
+            if (WiFi.AP.enableNAPT(true)) LOG.println("[host] NAPT on: the WiFi goes out through the phone");
+        }
+    }
+    beepDouble();
 }
 
 static void wifiConnect()
@@ -408,13 +633,18 @@ static void wifiConnect()
     bool   configured = prefs.getBool("configured", false);
     prefs.end();
 
+    if (g_netMode == 1) {
+        startHost();
+        return;
+    }
+
     if (!configured) {
-        Serial.println("[wifi] not configured — starting captive portal immediately");
+        LOG.println("[wifi] not configured — starting captive portal immediately");
         startCaptivePortal();
         return;
     }
 
-    Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
+    LOG.printf("[wifi] connecting to %s\n", ssid.c_str());
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(false);  // 自動再接続は checkWifiState() で制御
@@ -425,9 +655,9 @@ static void wifiConnect()
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
         delay(200);  // 500ms → 200ms: 接続成功の検出を高速化
-        Serial.print('.');
+        LOG.print('.');
     }
-    Serial.println();
+    LOG.println();
 
     if (WiFi.status() == WL_CONNECTED) {
         if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
@@ -435,11 +665,11 @@ static void wifiConnect()
         g_wifiLostMs = 0;
         dnsServer.stop();
         builtinLed.off();
-        Serial.printf("[wifi] connected IP=%s\n", WiFi.localIP().toString().c_str());
+        LOG.printf("[wifi] connected IP=%s\n", WiFi.localIP().toString().c_str());
         startNetServices();
         beepDouble();
     } else {
-        Serial.println("[wifi] 59 s elapsed — starting captive portal");
+        LOG.println("[wifi] 59 s elapsed — starting captive portal");
         startCaptivePortal();
     }
 }
@@ -458,7 +688,7 @@ static void checkApRetry()
         g_apRetrySta = false;
         g_wifiLostMs = 0;
         builtinLed.off();
-        Serial.printf("[wifi] joined from the setup AP  IP=%s\n", WiFi.localIP().toString().c_str());
+        LOG.printf("[wifi] joined from the setup AP  IP=%s\n", WiFi.localIP().toString().c_str());
         startNetServices();
         beepDouble();
         return;
@@ -467,12 +697,13 @@ static void checkApRetry()
     if (now - g_apRetryMs < AP_RETRY_INTERVAL_MS) return;
     g_apRetryMs = now;
     if (WiFi.softAPgetStationNum() > 0) return;
-    Serial.println("[wifi] setup AP: retrying the saved network");
+    LOG.println("[wifi] setup AP: retrying the saved network");
     WiFi.reconnect();
 }
 
 static void checkWifiState()
 {
+    if (g_hostActive) return;
     if (apModeActive) { checkApRetry(); return; }
 
     if (WiFi.status() == WL_CONNECTED) {
@@ -480,7 +711,7 @@ static void checkWifiState()
             // WiFi 復旧 → ブザー即停止 + TCP サーバー・mDNS 再起動
             if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
             g_wifiLostMs = 0;
-            Serial.printf("[wifi] reconnected IP=%s\n", WiFi.localIP().toString().c_str());
+            LOG.printf("[wifi] reconnected IP=%s\n", WiFi.localIP().toString().c_str());
             startNetServices();
             beepDouble();
         }
@@ -493,7 +724,7 @@ static void checkWifiState()
     if (g_wifiLostMs == 0) {
         g_wifiLostMs    = now;
         lastReconnectMs = now;
-        Serial.println("[wifi] disconnected — reconnecting");
+        LOG.println("[wifi] disconnected — reconnecting");
         // WiFi 切断起因の TCP 切断は静かにクリア
         g_tcpSessionActive = false;
         g_tcpEverConnected = false;
@@ -512,7 +743,7 @@ static void checkWifiState()
     if (now - g_wifiLostMs >= 60000) {
         if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
         g_wifiLostMs = 0;
-        Serial.println("[wifi] 60 s without connection — starting captive portal");
+        LOG.println("[wifi] 60 s without connection — starting captive portal");
         startCaptivePortal();
         return;
     }
@@ -520,7 +751,7 @@ static void checkWifiState()
     // 10 秒ごとに再接続を試みる
     if (now - lastReconnectMs >= 10000) {
         lastReconnectMs = now;
-        Serial.println("[wifi] retrying reconnect");
+        LOG.println("[wifi] retrying reconnect");
         WiFi.reconnect();
     }
 }
@@ -544,20 +775,68 @@ static void handleLangToggle()
 
 static void handleWifiPost()
 {
-    String ssid = webServer.arg("ssid");
-    String pass = webServer.arg("pass");
+    uint8_t mode   = webServer.arg("mode") == "1" ? 1 : 0;
+    String  ssid   = webServer.arg("ssid");
+    String  pass   = webServer.arg("pass");
+    String  hssid  = webServer.arg("hssid");
+    String  hpass  = webServer.arg("hpass");
+    int     hch    = webServer.arg("hch").toInt();
+    bool    tether = webServer.hasArg("tether");
+    hssid.trim();
+    if (hch < 6 || hch > 11) hch = HOST_CH_DEFAULT;
 
-    if (ssid.length() == 0) {
-        webServer.send(200, "text/html",
-            pageWifi(L("SSID cannot be empty.", "SSIDを入力してください。")));
+    if (mode == 0 && ssid.length() == 0) {
+        webServer.send(200, "text/html", pageWifi(L("SSID cannot be empty.", "SSIDを入力してください。")));
         return;
     }
+    if (mode == 1 && hssid.length() == 0) {
+        webServer.send(200, "text/html", pageWifi(L("The host SSID cannot be empty.", "ホストの SSID を入力してください。")));
+        return;
+    }
+    if (hpass.length() && (hpass.length() < 8 || hpass.length() > 63)) {
+        webServer.send(200, "text/html", pageWifi(L("The host password needs 8-63 characters.", "ホストのパスワードは 8〜63 文字にしてください。")));
+        return;
+    }
+    // A change of mode, of the host's WiFi or of tethering: restart (the
+    // WiFi and the USB port start afresh). The client's network alone:
+    // join it now, as before.
+    bool restart = mode != g_netMode || tether != g_tetherEn ||
+                   (mode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh));
     prefs.begin("elrs", false);
-    prefs.putString("ssid", ssid);
+    if (ssid.length()) {
+        prefs.putString("ssid", ssid);
+        prefs.putBool("configured", true);
+    }
     if (pass.length() > 0) prefs.putString("wifiPass", pass);
-    prefs.putBool("configured", true);
+    prefs.putUChar("netMode", mode);
+    prefs.putString("hSsid", hssid.length() ? hssid : g_hostSsid);
+    if (hpass.length()) prefs.putString("hPass", hpass);
+    prefs.putUChar("hCh", hch);
+    prefs.putBool("tether", tether);
     prefs.end();
+    g_netMode = mode;
+    if (hssid.length()) g_hostSsid = hssid;
+    if (hpass.length()) g_hostPass = hpass;
+    g_hostCh = hch;
 
+    if (restart) {
+        String p = htmlHead(L("WiFi Settings", "WiFi設定"));
+        p += "<div class='msg'>";
+        p += mode == 1 ? L("Saved. Restarting in host mode: join the WiFi ", "保存しました。ホストモードで再起動します。WiFi ")
+                       : L("Saved. Restarting in client mode.", "保存しました。クライアントモードで再起動します。");
+        if (mode == 1) { p += htmlEsc(g_hostSsid); p += L(" and open http://192.168.4.1", " に接続して http://192.168.4.1 を開いてください"); }
+        p += "</div></body></html>";
+        webServer.send(200, "text/html", p);
+        beepShort();
+        delay(800);
+        ESP.restart();
+        return;
+    }
+    if (mode == 1) {   // host mode, nothing of it changed
+        webServer.send(200, "text/html", pageWifi(L("Saved.", "保存しました。")));
+        beepShort();
+        return;
+    }
     webServer.send(200, "text/html",
         pageWifi(L("Saved. Connecting\xe2\x80\xa6", "保存しました。接続中…")));
     beepShort();
@@ -617,6 +896,13 @@ static void loadPrefs()
     g_buzzerEnabled    = prefs.getBool("buzzerEn",    true);
     g_ledEnabled       = prefs.getBool("ledEn",       true);
     g_langJa           = prefs.getBool("langJa",      true);
+    g_netMode          = prefs.getUChar("netMode",    0) == 1 ? 1 : 0;
+    g_hostSsid         = prefs.getString("hSsid",     HOST_SSID_DEFAULT);
+    g_hostPass         = prefs.getString("hPass",     HOST_PASS_DEFAULT);
+    g_hostCh           = prefs.getUChar("hCh",        HOST_CH_DEFAULT);
+    g_tetherEn         = prefs.getBool("tether",      false);
+    if (g_hostCh < 6 || g_hostCh > 11) g_hostCh = HOST_CH_DEFAULT;
+    if (!g_hostSsid.length()) g_hostSsid = HOST_SSID_DEFAULT;
     prefs.end();
 }
 
@@ -637,7 +923,7 @@ static void updateVoltage()
     if (alarm != g_alarmActive) {
         g_alarmActive = alarm;
         if (alarm) alarmOn(); else alarmOff();
-        Serial.printf("[vbat] %.2f V — alarm %s\n", g_currentVoltage, alarm ? "ON" : "OFF");
+        LOG.printf("[vbat] %.2f V — alarm %s\n", g_currentVoltage, alarm ? "ON" : "OFF");
     }
 }
 
@@ -663,8 +949,8 @@ static void updateNotifyLed()
         return;
     }
 
-    // WiFi 未接続 → 0 ↔ 255 の 80ms 高速点滅
-    if (WiFi.status() != WL_CONNECTED) {
+    // WiFi 未接続 → 0 ↔ 255 の 80ms 高速点滅（ホストモードは自分の WiFi なので対象外）
+    if (!g_hostActive && WiFi.status() != WL_CONNECTED) {
         nlWrite((now % 160 < 80) ? 255 : 0);
         return;
     }
@@ -699,7 +985,7 @@ static void updateNotifyLed()
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("[boot] XIAO ESP32-S3 WiFi bridge + Web UI");
+    LOG.printf("[boot] XIAO ESP32-S3 WiFi bridge + Web UI  %s (%s)\n", fwVersion(), fwBuild());
 
     analogReadResolution(12);
 
@@ -736,13 +1022,17 @@ void setup()
     webServer.on("/voltage",             HTTP_GET,  handleVoltageGet);
     webServer.on("/voltage",             HTTP_POST, handleVoltagePost);
     webServer.on("/lang",                HTTP_GET,  handleLangToggle);
+    // Firmware update: from the internet (a router, or USB tethering) or a file.
+    fwUpdateRoutes(webServer,
+        [] { return (!g_hostActive && !apModeActive && WiFi.status() == WL_CONNECTED) || tetherNetif() != nullptr; },
+        htmlHead, [] { return g_langJa; });
     webServer.on("/generate_204",        HTTP_GET,  handleRoot);
     webServer.on("/hotspot-detect.html", HTTP_GET,  handleRoot);
     webServer.on("/ncsi.txt",            HTTP_GET,  handleRoot);
     webServer.onNotFound(handleNotFound);
     webServer.begin();
-    Serial.println("[web] HTTP server on port 80");
-    Serial.println("[boot] ready");
+    LOG.println("[web] HTTP server on port 80");
+    LOG.println("[boot] ready");
 }
 
 void loop()
@@ -751,13 +1041,14 @@ void loop()
     if (g_wifiLostEvent) {
         g_wifiLostEvent = false;
         tcpClient.stop();
-        Serial.println("[tcp] closed — WiFi lost");
+        LOG.println("[tcp] closed — WiFi lost");
     }
 
     checkWifiState();
     updateBeep();
     updateWifiBuzzer();
     if (apModeActive) dnsServer.processNextRequest();
+    if (g_hostActive) dnsRelayPoll();
     webServer.handleClient();
     updateLed();
     updateVoltage();
@@ -767,7 +1058,7 @@ void loop()
     if (g_tcpSessionActive && (!tcpClient || !tcpClient.connected())) {
         g_tcpSessionActive = false;
         tcpClient.stop();   // TCP リソース解放 → サーバーが即座に新規接続を受け付けられるように
-        Serial.println("[tcp] session lost");
+        LOG.println("[tcp] session lost");
         beepLong3();
     }
     // 新規クライアント受け付け。接続中でも新しい接続を優先する:
@@ -778,7 +1069,7 @@ void loop()
         if (c) {
             if (tcpClient && tcpClient.connected()) {
                 tcpClient.stop();
-                Serial.println("[tcp] replaced by a new connection");
+                LOG.println("[tcp] replaced by a new connection");
             }
             setTcpKeepalive(c.fd());
             tcpClient = c;
@@ -788,7 +1079,7 @@ void loop()
             mspFromTcp.markPacketReceived();
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
-            Serial.println("[tcp] session started");
+            LOG.println("[tcp] session started");
             beepShort();
         }
     }

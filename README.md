@@ -147,6 +147,20 @@ The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21
 
 ---
 
+### Ways to write the firmware (from v2.13)
+
+| Way | For | How |
+|---|---|---|
+| **Web flasher** (latest) | netpack XIAO, ESP-NOW bridge (C3 / Wrover-E) | Open [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) in Chrome / Edge on a PC and press the device's "書き込む" |
+| **Web flasher** (your own files) | same | Drop .bin files (a test build, an older release) or a release zip on "ファイルを指定して書き込む". Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot |
+| **Online** (a button) | netpack XIAO | netpack settings → "更新" (Update) → "🔍 最新版を確認" → "⬇️ … に更新". Needs the internet (a router in client mode, or USB tethering in host mode) |
+| **A file** | netpack XIAO | netpack settings → "更新" → pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin` or the one in the release zip) |
+| **PlatformIO** (from the source on GitHub) | all | below |
+
+- A release carries the zips (bootloader, partitions, firmware), one-file `*-full.bin` images (written at `0x0`, for esptool-js and others), and `elrs-netpack-xiao_esp32s3-firmware.bin` and `elrs-netpack-version.txt` for the online update.
+- Settings (WiFi and so on) are kept every way (unless you tick erase).
+- GitHub Actions builds the web flasher at each release and puts it on GitHub Pages (Settings → Pages → Source must be **GitHub Actions**).
+
 ### Flash XIAO ESP32-S3 (`elrs-xiao-webui/`)
 
 1. Open the folder in VS Code:
@@ -194,6 +208,9 @@ If flashing fails, enter bootloader mode:
 | Buzzer | Double-beep on WiFi connect; short beep on settings save |
 | Notification LED | 7-color auto-cycling LED with PWM brightness control |
 | Fast reconnect | Non-blocking auto-reconnect; retries every 10 s, falls back to captive portal after 60 s |
+| Host mode (v2.13) | The netpack runs its own WiFi; the timer and phones join it (below) |
+| USB tethering (v2.13) | In host mode, an Android phone on the USB port takes the WiFi to the internet (on / off in the settings) |
+| Update page (v2.13) | Write a firmware.bin from the browser (`/update`) |
 | Max TX power | 21 dBm (both WiFi and ESP-NOW sides) |
 | Backpack version | Reports firmware version 10.1 to RotorHazard |
 
@@ -215,11 +232,59 @@ Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its ow
 
 ---
 
+### Host mode and USB tethering (v2.13)
+
+A setup built around the netpack. Its XIAO runs a WiFi of its own (host mode), and the timer and the phones join it. The timer's MSP goes on as before: UART → ESP-NOW bridge → the goggles' backpack (the bridge is a separate board; its ESP-NOW stays on channel 1).
+
+```
+ phones (viewers, admin) ──┐
+ FPV C5 Lap Timer ─────────┼── WiFi "ELRS-Netpack" ── netpack XIAO ──UART── ESP-NOW bridge ── goggles
+ (client mode)             ┘     (ch 6-11)              │USB
+                                                        └── Android phone (USB tethering) ── internet
+```
+
+**Host mode** (WiFi settings page)
+
+1. Under "接続方式" (connection) pick **Host**, enter the host SSID, password (8-63 characters) and channel (6-11), and save. The netpack restarts with that WiFi (defaults: SSID `ELRS-Netpack`, password `elrs-netpack`, ch 6).
+2. The settings page is at `http://192.168.4.1/` (or `http://elrs-netpack.local/`).
+3. Put the timer in **client mode** with this SSID and password. Leave its netpack address at `auto`: it finds the netpack as `elrs-netpack.local`.
+4. Phones join the same WiFi; "**タイマーを開く**" (open the timer) on the netpack's page links to the timer (the address its MSP comes from).
+5. Up to **10 devices**, the timer included. The page lists the devices on the WiFi with their signal.
+6. To go back, pick "Client" and save.
+
+**USB tethering** (host mode only)
+
+With an Android phone on the XIAO's USB-C and its "USB tethering" on, the devices on the netpack's WiFi (timer, phones) reach the internet through the phone's mobile data (the timer's update check and online update, for instance).
+
+- Tick "**USB テザリング**" (USB tethering) on the WiFi settings page and save (on / off; off by default).
+- On the phone: Settings → Network & internet → Hotspot & tethering → **USB tethering** (names vary). RNDIS (most Android phones) and CDC-NCM / ECM (newer Pixels and others) work. **iPhones do not.**
+- The settings page shows the state (waiting for a phone → turn tethering on → waiting for an address → **up**).
+- The netpack passes the devices' DNS on to the phone's and routes their traffic out through the phone (NAPT).
+- The tethering phone itself should not join the netpack's WiFi (its way out would loop back to the netpack).
+
+**Cabling and power (important)**
+
+- The XIAO is the USB **host**. Plug a **USB-C (male) → USB-A (female) OTG adapter** into the XIAO and use the phone's charging cable (USB-A → phone). A USB-C ↔ USB-C cable makes the phone the host and does not work.
+- The phone only sees the connection with **5 V on VBUS**. The XIAO's 5V pin is the USB VBUS, so a netpack **powered through its 5V pin** (through a diode, from a 5 V BEC or USB supply) puts 5 V there. With only a LiPo on the BAT pads there is no 5 V, and the phone sees nothing.
+- The phone tries to charge from VBUS (up to about 500 mA). Leave the supply some headroom.
+- While it is on, the USB port is not the XIAO's serial port: **the log goes to D6 (GPIO43, UART0 TX, 115200)**. Update from the **Update** page (`/update`) with a firmware.bin, or hold BOOT while plugging the XIAO into a PC.
+
+---
+
 ### Web UI Pages
 
 **`/wifi` — WiFi Settings**
-- Enter SSID and password → save and connect
-- Leave password blank to keep existing password
+- State: the mode and address, where MSP comes from (with a link to the timer), and in host mode the devices on the WiFi and the USB tethering state
+- Connection: client (joins a WiFi) / host (the netpack's own WiFi)
+- Client: SSID and password (blank keeps the current password)
+- Host: SSID, password (8-63 characters; blank keeps it) and channel (6-11)
+- USB tethering: on / off (host mode only)
+- Changing the connection, the host's WiFi or tethering restarts the netpack after saving
+
+**`/update` — Firmware update** (v2.13)
+- The firmware's version (release and build)
+- Online: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update) when there is a newer release; it is written and the netpack restarts
+- A file: pick the firmware.bin of `elrs-xiao-webui`; it is written and the netpack restarts. Settings are kept
 
 **`/voltage` — Voltage Monitor**
 - Displays current LiPo voltage
@@ -238,7 +303,7 @@ Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its ow
 | AP mode (needs configuration) | Slow blink 500 ms |
 | WiFi disconnected | Rapid blink 80 ms (until reconnected) |
 | Voltage alarm active | Solid on |
-| STA connected (normal) | Heartbeat double-pulse, peak brightness ~4%, 2 s period |
+| STA connected or host mode (normal) | Heartbeat double-pulse, peak brightness ~4%, 2 s period |
 | LED disabled (setting) | Off |
 
 ### Built-in LED Behavior (GPIO21 — active-LOW)
@@ -266,6 +331,11 @@ All settings survive power cycles (stored in ESP32 flash via Preferences).
 | `buzzerEn` | Bool | true | Buzzer enabled |
 | `ledEn` | Bool | true | Notification LED enabled |
 | `langJa` | Bool | true | Language (true = Japanese) |
+| `netMode` | UChar | 0 | Connection (0 = client, 1 = host) |
+| `hSsid` | String | `ELRS-Netpack` | Host mode SSID |
+| `hPass` | String | `elrs-netpack` | Host mode password |
+| `hCh` | UChar | 6 | Host mode channel (6-11) |
+| `tether` | Bool | false | USB tethering (host mode only) |
 
 ---
 

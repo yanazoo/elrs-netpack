@@ -1,9 +1,12 @@
 ---
 name: Publish Release
 
-# リリースブランチ (vX.Y.Z) への push で GitHub Release を自動作成する。
-# タグはブランチ名、タイトルは docs/releases/<tag>.md の先頭見出し、
-# 本文は同ファイル全体。既にリリースが存在する場合は何もしない。
+# Pushing a release branch (vX.Y) builds the firmware and publishes a GitHub
+# Release: tag = branch name, title = first heading of docs/releases/<tag>.md,
+# body = that file, assets = the build outputs. If the release already
+# exists, only its title and notes are updated (no rebuild). Does nothing if
+# the notes file is missing. The web flasher site goes to GitHub Pages
+# (pages.yml).
 on:
   push:
     branches:
@@ -14,29 +17,82 @@ permissions:
 
 jobs:
   release:
-    name: Create GitHub Release
+    name: Build and publish the release
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Determine release parameters
+      - name: Release parameters
         id: params
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
           NOTES="docs/releases/${TAG}.md"
           if [ ! -f "$NOTES" ]; then
             echo "No release notes at $NOTES — nothing to publish"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           TITLE="$(head -n 1 "$NOTES" | sed 's/^#[[:space:]]*//')"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists — updating its title and notes only"
+            gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           {
             echo "skip=false"
             echo "tag=$TAG"
             echo "title=$TITLE"
             echo "notes=$NOTES"
           } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        if: steps.params.outputs.skip == 'false'
+        with:
+          python-version: "3.12"
+
+      - name: Build firmware
+        if: steps.params.outputs.skip == 'false'
+        run: |
+          pip install "platformio==6.1.18"
+          bash tools/ci_penv.sh
+          pio run -d elrs-xiao-webui -e xiao_esp32s3
+          pio run -d elrs-espnow-bridge -e esp32dev -e xiao_esp32c3
+
+      - name: Package
+        if: steps.params.outputs.skip == 'false'
+        run: |
+          TAG="${{ steps.params.outputs.tag }}"
+          mkdir -p dist
+          pack() {   # pack <zip name> <build dir> <files...>
+            local name="$1" dir="$2"; shift 2
+            (cd "$dir" && zip -j "$GITHUB_WORKSPACE/dist/$name" "$@")
+          }
+          pack "elrs-netpack-${TAG}-xiao_esp32s3.zip" elrs-xiao-webui/.pio/build/xiao_esp32s3 \
+            bootloader.bin partitions.bin firmware.bin
+          for env in esp32dev xiao_esp32c3; do
+            pack "elrs-espnow-bridge-${TAG}-${env}.zip" elrs-espnow-bridge/.pio/build/$env \
+              bootloader.bin partitions.bin firmware.bin
+          done
+          # The flasher site, and one-file images (offset 0x0) for other tools.
+          python3 tools/flasher_site.py site "$TAG" --full dist
+          # For the netpack's online update: the same names in every release
+          # (releases/latest/download/<name>).
+          cp elrs-xiao-webui/.pio/build/xiao_esp32s3/firmware.bin dist/elrs-netpack-xiao_esp32s3-firmware.bin
+          echo "$TAG" > dist/elrs-netpack-version.txt
+          ls -l dist
+
+      # Published by pages.yml (it runs on main: the github-pages
+      # environment only takes deployments from the default branch).
+      - uses: actions/upload-artifact@v4
+        if: steps.params.outputs.skip == 'false'
+        with:
+          name: flasher-site
+          path: site
+          retention-days: 7
 
       - name: Create release
         if: steps.params.outputs.skip == 'false'
@@ -48,11 +104,7 @@ jobs:
           TITLE: ${{ steps.params.outputs.title }}
           NOTES: ${{ steps.params.outputs.notes }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — skipping"
-            exit 0
-          fi
-          gh release create "$TAG" \
+          gh release create "$TAG" dist/*.zip dist/*.bin dist/*.txt \
             --target "${{ github.sha }}" \
             --title "$TITLE" \
             --notes-file "$NOTES"

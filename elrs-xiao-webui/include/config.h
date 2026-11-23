@@ -39,3 +39,10 @@
 
 // Notification LED (mirrors buzzer state)
 #define LED_NOTIFY_PIN   9
+
+// Host mode: the netpack's own WiFi (the timer and the phones join it).
+// Channels 6-11 only, as the timer (the ESP-NOW bridge stays on ch 1).
+#define HOST_SSID_DEFAULT  "ELRS-Netpack"
+#define HOST_PASS_DEFAULT  "elrs-netpack"
+#define HOST_CH_DEFAULT    6
+#define HOST_MAX_STA       10

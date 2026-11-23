@@ -1,0 +1,26 @@
+name: Build
+
+# Builds the netpack XIAO and the ESP-NOW bridge on every push and PR.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build netpack XIAO (S3) and ESP-NOW bridge (Wrover-E, XIAO C3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the version from the tags (build_info.py)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # pioarduino 55.03.x is built for platformio-core 6.1.18.
+      - run: pip install "platformio==6.1.18"
+      - run: bash tools/ci_penv.sh
+      - run: pio run -d elrs-xiao-webui -e xiao_esp32s3
+      - run: pio run -d elrs-espnow-bridge -e esp32dev -e xiao_esp32c3
+      - name: Flasher site (check)
+        run: python3 tools/flasher_site.py site ci
