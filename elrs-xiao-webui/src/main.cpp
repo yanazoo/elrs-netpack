@@ -412,6 +412,14 @@ static IPAddress findLapTimer()
     return g_lapIp;
 }
 
+// FPV C5 Lap Timer's address without waiting (for DNS): the MSP peer, or
+// the last mDNS answer.
+static IPAddress knownLapTimer()
+{
+    if (tcpClient && tcpClient.connected()) return tcpClient.remoteIP();
+    return g_lapIp;
+}
+
 static String statusCard()
 {
     String p = "<div class='card st'>";
@@ -460,7 +468,8 @@ static String statusCard()
         for (int i = 0; i < n; i++) memcpy(pairs[i].mac, sl.sta[i].mac, 6);
         if (n) esp_netif_dhcps_get_clients_by_mac(WiFi.AP.netif(), n, pairs);
         for (int i = 0; i < n; i++) {
-            snprintf(b, sizeof b, "・" IPSTR "（%d dBm）<br>", IP2STR(&pairs[i].ip), sl.sta[i].rssi);
+            if (pairs[i].ip.addr) snprintf(b, sizeof b, "・" IPSTR "（%d dBm）<br>", IP2STR(&pairs[i].ip), sl.sta[i].rssi);
+            else snprintf(b, sizeof b, "・%s（%d dBm）<br>", L("no address yet", "アドレス未取得"), sl.sta[i].rssi);
             p += b;
         }
         if (g_tetherEn) {
@@ -740,9 +749,34 @@ static int udpSocket(uint16_t port)
     return s;
 }
 
+// The name asked in a DNS query (lower case), or "" if it can't be read.
+static String dnsQueryName(const uint8_t *buf, int n)
+{
+    if (n < 12 || (buf[2] & 0x80) || buf[4] != 0 || buf[5] != 1) return "";
+    String name;
+    int q = 12;
+    while (q < n && buf[q]) {
+        int len = buf[q];
+        if ((len & 0xC0) || q + len + 1 >= n) return "";
+        if (name.length()) name += '.';
+        for (int i = 1; i <= len; i++) name += (char)tolower(buf[q + i]);
+        q += len + 1;
+    }
+    return name;
+}
+
+static int dnsAnswer(uint8_t *buf, int n, int cap, uint32_t addr);
+
 // Turns the query in buf into an answer: A → 192.168.4.1, anything else
 // (AAAA, ...) → no records. Length of the answer, or 0.
 static int dnsAnswerSelf(uint8_t *buf, int n, int cap)
+{
+    return dnsAnswer(buf, n, cap, (uint32_t)IPAddress(192, 168, 4, 1));
+}
+
+// The answer: A → addr; other types → no records; addr 0 → "no such name"
+// (the asker then looks it up itself, by mDNS).
+static int dnsAnswer(uint8_t *buf, int n, int cap, uint32_t addr)
 {
     if (n < 12 || (buf[2] & 0x80) || buf[4] != 0 || buf[5] != 1) return 0;   // one question
     int q = 12;
@@ -755,11 +789,12 @@ static int dnsAnswerSelf(uint8_t *buf, int n, int cap)
     uint16_t qtype = (buf[q] << 8) | buf[q + 1], qclass = (buf[q + 2] << 8) | buf[q + 3];
     q += 4;                       // the question ends here (anything after it is dropped)
     buf[2] = 0x84 | (buf[2] & 0x01);   // response, authoritative, RD as asked
-    buf[3] = 0x80;                     // RA, no error
+    buf[3] = addr ? 0x80 : 0x83;       // RA; no error, or NXDOMAIN
     buf[6] = buf[7] = buf[8] = buf[9] = buf[10] = buf[11] = 0;
-    if (qtype != 1 || qclass != 1 || q + 16 > cap) return q;   // no records
+    if (!addr || qtype != 1 || qclass != 1 || q + 16 > cap) return q;   // no records
     buf[7] = 1;                        // one answer
-    const uint8_t ans[16] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4, 192, 168, 4, 1};
+    uint8_t ans[16] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4, 0, 0, 0, 0};
+    memcpy(ans + 12, &addr, 4);        // network order, as IPAddress holds it
     memcpy(buf + q, ans, sizeof ans);
     return q + 16;
 }
@@ -780,6 +815,18 @@ static void dnsRelayPoll()
         socklen_t fl = sizeof from;
         int n = recvfrom(g_dnsSock, buf, sizeof buf, 0, (sockaddr *)&from, &fl);
         if (n < 12) break;
+        // .local names answered here: FPV C5 Lap Timer's real address (so
+        // fpv-c5-lt.local opens it, not us, and works on phones without
+        // mDNS), ourselves, or "no such name" (the asker uses mDNS).
+        String qn = dnsQueryName(buf, n);
+        if (qn.endsWith(".local")) {
+            uint32_t a = 0;
+            if (qn == "elrs-netpack.local") a = (uint32_t)IPAddress(192, 168, 4, 1);
+            else if (qn == "fpv-c5-lt.local") a = (uint32_t)knownLapTimer();
+            int m = dnsAnswer(buf, n, sizeof buf, a);
+            if (m > 0) sendto(g_dnsSock, buf, m, 0, (sockaddr *)&from, fl);
+            continue;
+        }
         TetherInfo t;
         tetherInfo(&t);
         if (t.state != TetherState::Up) {
