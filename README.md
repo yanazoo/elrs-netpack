@@ -52,7 +52,7 @@ A lap timer (**FPV C5 Lap Timer** or **RotorHazard**) sends MSP packets (the gog
 
 ```
  phones (viewers, admin) ──┐
- FPV C5 Lap Timer ─────────┼── WiFi "ELRS-Netpack" ── netpack XIAO ──UART── ELRS Backpack bridge ── goggles
+ FPV C5 Lap Timer ─────────┼── WiFi "ELRS-NETpack" ── netpack XIAO ──UART── ELRS Backpack bridge ── goggles
  (client mode)             ┘     (ch 6-11)              │USB
                                                         └── Android phone (USB tethering) ── internet
 ```
@@ -197,7 +197,7 @@ Changing the connection, the host's WiFi or tethering restarts the netpack after
 
 **Host mode** (WiFi settings page)
 
-1. Under "接続方式" (connection) pick **Host**, enter the host SSID, password (8-63 characters) and channel (6-11), and save. The netpack restarts with that WiFi (defaults: SSID `ELRS-Netpack`, password `elrs-netpack`, ch 6).
+1. Under "接続方式" (connection) pick **Host**, enter the host SSID, password (8-63 characters) and channel (6-11), and save. The netpack restarts with that WiFi (defaults: SSID `ELRS-NETpack`, password `elrs-netpack`, ch 6).
 2. The settings page is at `http://192.168.4.1/` (or `http://elrs-netpack.local/`).
 3. Put the timer in **client mode** with this SSID and password. Leave its netpack address at `auto`: it finds the netpack as `elrs-netpack.local`.
 4. Phones join the same WiFi; "**タイマーを開く**" (open the timer) on the netpack's page links to the timer (the address its MSP comes from).
@@ -351,7 +351,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 | `ip` / `mask` / `gw` / `dns` | UInt | 0 / 255.255.255.0 / 0 / 0 | The fixed IP address, subnet mask, gateway, DNS |
 | `configured` | Bool | false | At least one network is saved |
 | `ssid` / `wifiPass` | String | — | The network of v2.2.x and before (moved to the first) |
-| `hSsid` | String | `ELRS-Netpack` | Host mode SSID |
+| `hSsid` | String | `ELRS-NETpack` | Host mode SSID |
 | `hPass` | String | `elrs-netpack` | Host mode password |
 | `hCh` | UChar | 6 | Host mode channel (6-11) |
 | `tether` | Bool | false | USB tethering (host mode only) |
@@ -368,7 +368,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 
 | | Setup WiFi (client mode, not joined) | Host mode WiFi |
 |---|---|---|
-| SSID | `ELRS-Netpack-Setup` | `ELRS-Netpack` (editable) |
+| SSID | `ELRS-Netpack-Setup` | `ELRS-NETpack` (editable) |
 | Password | `elrs-netpack` | `elrs-netpack` (editable) |
 | IP address | `192.168.4.1` | `192.168.4.1` |
 | Settings URL | `http://192.168.4.1/` | `http://192.168.4.1/` |

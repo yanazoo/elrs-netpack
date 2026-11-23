@@ -52,7 +52,7 @@
 
 ```
  スマホ（観戦・管理）──┐
- FPV C5 Lap Timer ────┼── WiFi「ELRS-Netpack」── netpack XIAO ──UART── ELRSバックパック-ブリッジ ── ゴーグル
+ FPV C5 Lap Timer ────┼── WiFi「ELRS-NETpack」── netpack XIAO ──UART── ELRSバックパック-ブリッジ ── ゴーグル
  （クライアントモード）  ┘     （ch 6〜11）          │USB
                                                     └── Android スマホ（USB テザリング）── インターネット
 ```
@@ -197,7 +197,7 @@ netpack の XIAO（初回起動・WiFi 未設定時）：
 
 **ホストモードの設定**（WiFi 設定ページ）
 
-1. 「接続方式」で **ホスト** を選び、ホストの SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）を入れて保存します。netpack が再起動し、その WiFi を出します（初期値：SSID `ELRS-Netpack`、パスワード `elrs-netpack`、6 ch）。
+1. 「接続方式」で **ホスト** を選び、ホストの SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）を入れて保存します。netpack が再起動し、その WiFi を出します（初期値：SSID `ELRS-NETpack`、パスワード `elrs-netpack`、6 ch）。
 2. 設定ページは `http://192.168.4.1/`（または `http://elrs-netpack.local/`）です。
 3. タイマーは **クライアントモード** で、接続先にこの SSID とパスワードを登録します。netpack アドレスは `auto` のままで、タイマーが `elrs-netpack.local` で netpack を見つけます。
 4. スマホもこの WiFi に接続し、netpack の設定ページの「**タイマーを開く**」（MSP の接続元＝タイマーのアドレス）からタイマーの画面を開けます。
@@ -351,7 +351,7 @@ UDP のような**コネクションレス送信**です。ブリッジはパイ
 | `ip` / `mask` / `gw` / `dns` | UInt | 0 / 255.255.255.0 / 0 / 0 | 固定する IP アドレス・サブネットマスク・ゲートウェイ・DNS |
 | `configured` | Bool | false | 接続先が 1 つ以上ある |
 | `ssid` / `wifiPass` | String | — | v2.2.x までの接続先（1 件目に引き継ぎ） |
-| `hSsid` | String | `ELRS-Netpack` | ホストモードの SSID |
+| `hSsid` | String | `ELRS-NETpack` | ホストモードの SSID |
 | `hPass` | String | `elrs-netpack` | ホストモードのパスワード |
 | `hCh` | UChar | 6 | ホストモードのチャンネル（6〜11） |
 | `tether` | Bool | false | USB テザリング（ホストモードのみ） |
@@ -368,7 +368,7 @@ UDP のような**コネクションレス送信**です。ブリッジはパイ
 
 | | 設定用の WiFi（クライアントモードで未接続のとき） | ホストモードの WiFi |
 |---|---|---|
-| SSID | `ELRS-Netpack-Setup` | `ELRS-Netpack`（変更可） |
+| SSID | `ELRS-Netpack-Setup` | `ELRS-NETpack`（変更可） |
 | パスワード | `elrs-netpack` | `elrs-netpack`（変更可） |
 | IP アドレス | `192.168.4.1` | `192.168.4.1` |
 | 設定 URL | `http://192.168.4.1/` | `http://192.168.4.1/` |
