@@ -162,7 +162,7 @@ Bridge:
 
 No source edits: everything is set on the web pages.
 
-1. After writing, the netpack XIAO runs the setup WiFi **`ELRS-NETpack-Setup`** (password `elrs-netpack`). Join it from a phone or PC and the settings page opens (else `http://192.168.4.1/`).
+1. After writing, the netpack XIAO runs the setup WiFi **`ELRS-NETpack-Setup`** (password `elrs-netpack`). Join it from a phone or PC and the settings page opens (else `http://192.168.4.1/`). Log in with the admin password (default `admin`).
 2. On "**WiFi**" pick the connection and save.
    - **Client**: the SSID and password of the network to join (FPV C5 Lap Timer's WiFi or a router); up to 5.
    - **Host**: the SSID, password and channel of the netpack's own WiFi.
@@ -309,13 +309,15 @@ It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID
 
 ## Web UI pages
 
+**Admin password** (v2.3.0): every page but QR (WiFi, voltage, update) opens **after a login**. The default password is **`admin`** (public): **change it** under "管理者パスワード" on the WiFi page (the page warns while it is the default). A login lasts 12 h (or until the netpack restarts); "ログアウト" on the WiFi page ends it.
+
 **`/wifi` — WiFi**: see [above](#wifi-settings-wifi).
 
 **`/qr` — QR codes** (v2.3.0)
 - Join the **ELRS-NETpack WiFi** (host mode's SSID and password): scan it with the phone's camera
 - Open **FPV C5 Lap Timer**'s screen (`http://fpv-c5-lt.local/`)
 - Made in the netpack: shown without the internet too
-- **Password**: none from the netpack's own WiFi in host mode (192.168.4.x); asked anywhere else (client mode, through a router). **The default is `admin`**: **change it** under "QR ページのパスワード" on the WiFi page (the page warns while it is the default)
+- Open **without a password**. In host mode, `http://192.168.4.1/` opens on this page
 
 **`/update` — Firmware update**
 - The firmware's version (release and build)
@@ -375,7 +377,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 | `hMax` | UChar | 5 | Host mode phones / PCs (1-9, besides FPV C5 Lap Timer) |
 | `lapMac` | Bytes | — | FPV C5 Lap Timer's MAC (learned from its OSD connection; never sent off by the limit) |
 | `tether` | Bool | false | USB tethering (host mode only) |
-| `qrPass` | String | `admin` | The QR page's password (change it) |
+| `admPass` | String | `admin` | Admin password (every page but QR; change it) |
 | `vbatRatio` | Float | 2.0 | Voltage divider ratio |
 | `alarmV` | Float | 3.5 | Alarm threshold (V) |
 | `vbatAlarmEn` | Bool | false | Voltage alarm on |
@@ -394,7 +396,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 | IP address | `192.168.4.1` | `192.168.4.1` |
 | Settings URL | `http://192.168.4.1/` | `http://192.168.4.1/` |
 
-The QR page's (`/qr`) password defaults to **`admin`** (a public default: change it on the WiFi page).
+The settings pages' (all but QR) **admin password defaults to `admin`** (a public default: change it on the WiFi page).
 
 ---
 

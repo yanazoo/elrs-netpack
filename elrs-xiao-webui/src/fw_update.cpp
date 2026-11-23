@@ -32,6 +32,14 @@ WebServer *g_web = nullptr;
 bool (*g_online)() = nullptr;
 String (*g_head)(const char *) = nullptr;
 bool (*g_ja)() = nullptr;
+bool (*g_authed)() = nullptr;
+
+bool authed() { return !g_authed || g_authed(); }
+void toLogin()
+{
+    g_web->sendHeader("Location", "/login?next=/update", true);
+    g_web->send(302, "text/plain", "");
+}
 
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 State   state = kIdle;
@@ -291,7 +299,11 @@ String page(const String &msg = "")
     return p;
 }
 
-void handlePage() { g_web->send(200, "text/html", page()); }
+void handlePage()
+{
+    if (!authed()) return toLogin();
+    g_web->send(200, "text/html", page());
+}
 
 void handleUpload()
 {
@@ -299,7 +311,7 @@ void handleUpload()
     if (u.status == UPLOAD_FILE_START) {
         LOG.printf("[update] file %s\n", u.filename.c_str());
         uploadBegan = true;
-        uploadOk = !taskRunning && Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
+        uploadOk = authed() && !taskRunning && Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
     } else if (u.status == UPLOAD_FILE_WRITE) {
         if (uploadOk && Update.write(u.buf, u.currentSize) != u.currentSize) uploadOk = false;
     } else if (u.status == UPLOAD_FILE_END) {
@@ -315,6 +327,11 @@ void handleUploadDone()
 {
     bool ok = uploadBegan && uploadOk;
     uploadBegan = false;
+    if (!authed()) {
+        if (g_web->hasArg("ajax")) g_web->send(403, "application/json", "{\"ok\":false,\"error\":\"login\"}");
+        else toLogin();
+        return;
+    }
     if (g_web->hasArg("ajax")) {   // the page's progress bar
         String e = ok ? "" : String(Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"));
         e.replace("\"", "'");
@@ -334,16 +351,20 @@ void handleUploadDone()
 
 }   // namespace
 
-void fwUpdateRoutes(WebServer &web, bool (*online)(), String (*head)(const char *), bool (*jaFn)())
+void fwUpdateRoutes(WebServer &web, bool (*online)(), String (*head)(const char *), bool (*jaFn)(), bool (*authedFn)())
 {
+    g_authed = authedFn;
     g_web = &web;
     g_online = online;
     g_head = head;
     g_ja = jaFn;
     web.on("/update", HTTP_GET, handlePage);
     web.on("/update", HTTP_POST, handleUploadDone, handleUpload);
+    // State: read by the page while the netpack restarts (no login cookie
+    // check needed for reading it).
     web.on("/api/update", HTTP_GET, [] { g_web->send(200, "application/json", statusJson()); });
     web.on("/api/update/check", HTTP_POST, [] {
+        if (!authed()) return sendJson(403, R"({"ok":false,"reason":"login"})");
         if (!g_online()) return sendJson(409, R"({"ok":false,"reason":"offline"})");
         if (taskRunning) return sendJson(409, R"({"ok":false,"reason":"busy"})");
         setState(kChecking);
@@ -351,6 +372,7 @@ void fwUpdateRoutes(WebServer &web, bool (*online)(), String (*head)(const char 
         sendJson(200, R"({"ok":true})");
     });
     web.on("/api/update/online", HTTP_POST, [] {
+        if (!authed()) return sendJson(403, R"({"ok":false,"reason":"login"})");
         if (!g_online()) return sendJson(409, R"({"ok":false,"reason":"offline"})");
         if (taskRunning || Update.isRunning()) return sendJson(409, R"({"ok":false,"reason":"busy"})");
         portENTER_CRITICAL(&mux);

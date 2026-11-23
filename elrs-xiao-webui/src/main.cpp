@@ -80,7 +80,9 @@ static int8_t   g_swOn       = -1;      // the switch at boot: 1 closed (host), 
 static bool     g_hostActive = false;   // host mode running
 static String   g_hostSsid   = HOST_SSID_DEFAULT;
 static String   g_hostPass   = HOST_PASS_DEFAULT;
-static String   g_qrPass     = QR_PASS_DEFAULT;    // the QR page's password
+static String   g_admPass    = ADMIN_PASS_DEFAULT;  // every page but QR asks for it
+static String   g_tokens[4];                         // logged-in browsers (until restart)
+static uint8_t  g_tokNext    = 0;
 static uint8_t  g_hostCh     = HOST_CH_DEFAULT;
 static uint8_t  g_hostPhones = HOST_PHONES_DEFAULT;   // phones / PCs besides FPV C5 Lap Timer
 static uint8_t  g_lapMac[6];                          // FPV C5 Lap Timer's (learned from its TCP)
@@ -591,13 +593,13 @@ static String pageWifi(const String &msg = "")
     p += L("Host mode only. Android: turn on Settings → Network → Hotspot &amp; tethering → USB tethering. While on, the USB port is not a serial port: update from the Update page (or hold BOOT while plugging in).",
            "ホストモードのときだけ動きます。Android は「設定 → ネットワーク → テザリング → USB テザリング」を ON。ON の間は USB でのシリアル・書き込みはできません（書き込みは「更新」ページ、または BOOT を押しながら USB を接続）。");
     p += "</div>";
-    p += "<h2>"; p += L("QR page password", "QR ページのパスワード"); p += "</h2>";
+    p += "<h2>"; p += L("Admin password", "管理者パスワード"); p += "</h2>";
     p += "<label>"; p += L("Password (blank keeps it)", "パスワード（変えないときは空欄）");
-    p += "<input type='password' name='qrpass' maxlength='32' autocomplete='new-password'></label>";
+    p += "<input type='password' name='admpass' maxlength='32' autocomplete='new-password'></label>";
     p += "<div class='note'>";
-    p += L("Asked to open the QR page, except from the netpack's own WiFi in host mode.",
-           "QR ページを開くときに聞きます（ホストモードの netpack の WiFi からは聞きません）。");
-    if (g_qrPass == QR_PASS_DEFAULT)
+    p += L("Asked for every page but QR. <a href='/logout'>Log out</a>",
+           "QR 以外のページを開くときに聞きます。<a href='/logout'>ログアウト</a>");
+    if (g_admPass == ADMIN_PASS_DEFAULT)
         p += L("<br><b style='color:#e0a050'>Still the default (admin): change it.</b>",
                "<br><b style='color:#e0a050'>初期値（admin）のままです。変更してください。</b>");
     p += "</div>";
@@ -653,25 +655,79 @@ static String wifiQrEsc(const String &in)
     return o;
 }
 
-// The QR page without a password: a browser on our own WiFi in host mode
-// (it knows the WiFi password already). Anywhere else, the password.
-static bool qrOpen()
+// Login: every page but the QR page needs the admin password. A login is a
+// cookie with a random token, kept 12 h (tokens are forgotten at restart).
+static bool authed()
 {
-    IPAddress r = webServer.client().remoteIP();
-    return g_hostActive && r[0] == 192 && r[1] == 168 && r[2] == 4;
+    String c = webServer.header("Cookie");
+    int i = c.indexOf("np=");
+    if (i < 0) return false;
+    String t = c.substring(i + 3, i + 3 + 16);
+    if (t.length() != 16) return false;
+    for (auto &k : g_tokens)
+        if (k.length() && k == t) return true;
+    return false;
 }
 
-static String pageQrLogin(const String &msg = "")
+static void toLogin()
 {
-    String p = htmlHead("QR");
-    p += "<h2>"; p += L("QR codes: password", "QR コード：パスワード"); p += "</h2>";
+    String next = webServer.uri();
+    if (next == "/login") next = "/wifi";
+    webServer.sendHeader("Location", "/login?next=" + next, true);
+    webServer.send(302, "text/plain", "");
+}
+
+// Checks the login; false (and the browser sent to the login page) without one.
+static bool needLogin()
+{
+    if (authed()) return false;
+    toLogin();
+    return true;
+}
+
+static String pageLogin(const String &msg = "")
+{
+    String p = htmlHead(L("Login", "ログイン"));
+    String next = webServer.arg("next");
+    if (!next.startsWith("/") || next.startsWith("//")) next = "/wifi";
+    p += "<h2>"; p += L("Admin password", "管理者パスワード"); p += "</h2>";
     if (msg.length()) { p += "<div class='msg alarm'>"; p += msg; p += "</div>"; }
-    p += "<form method='POST' action='/qr'><label>"; p += L("Password", "パスワード");
-    p += "<input type='password' name='pw' autofocus></label>";
-    p += "<button type='submit'>"; p += L("Show", "表示"); p += "</button></form><div class='note'>";
-    p += L("Set on the WiFi page (default: admin).", "WiFi のページで設定します（初期値：admin）。");
+    p += "<form method='POST' action='/login'><input type='hidden' name='next' value='"; p += htmlEsc(next); p += "'>";
+    p += "<label>"; p += L("Password", "パスワード"); p += "<input type='password' name='pw' autofocus></label>";
+    p += "<button type='submit'>"; p += L("Log in", "ログイン"); p += "</button></form><div class='note'>";
+    p += L("The QR page needs no password. Default password: admin (change it on the WiFi page).",
+           "QR ページはパスワードなしで見られます。初期パスワード：admin（WiFi のページで変更してください）。");
     p += "</div></body></html>";
     return p;
+}
+
+static void handleLoginPost()
+{
+    String next = webServer.arg("next");
+    if (!next.startsWith("/") || next.startsWith("//")) next = "/wifi";
+    if (webServer.arg("pw") != g_admPass) {
+        webServer.send(200, "text/html", pageLogin(L("Wrong password.", "パスワードが違います。")));
+        return;
+    }
+    char t[17];
+    snprintf(t, sizeof t, "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
+    g_tokens[g_tokNext] = t;
+    g_tokNext = (g_tokNext + 1) % 4;
+    webServer.sendHeader("Set-Cookie", String("np=") + t + "; Path=/; Max-Age=43200; HttpOnly");
+    webServer.sendHeader("Location", next, true);
+    webServer.send(302, "text/plain", "");
+}
+
+static void handleLogout()
+{
+    String c = webServer.header("Cookie");
+    int i = c.indexOf("np=");
+    if (i >= 0)
+        for (auto &k : g_tokens)
+            if (k.length() && k == c.substring(i + 3, i + 19)) k = "";
+    webServer.sendHeader("Set-Cookie", "np=; Path=/; Max-Age=0");
+    webServer.sendHeader("Location", "/qr", true);
+    webServer.send(302, "text/plain", "");
 }
 
 static String pageQr()
@@ -1166,9 +1222,15 @@ static void checkWifiState()
 
 // ── Web handlers ──────────────────────────────────────────────────────────────
 
-static void handleRoot()       { webServer.send(200, "text/html", pageWifi()); }
-static void handleWifiGet()    { webServer.send(200, "text/html", pageWifi()); }
-static void handleVoltageGet() { webServer.send(200, "text/html", pageVoltage()); }
+// The first page: the QR codes in host mode (no password), else WiFi.
+static void handleRoot()
+{
+    if (g_hostActive) { webServer.send(200, "text/html", pageQr()); return; }
+    if (needLogin()) return;
+    webServer.send(200, "text/html", pageWifi());
+}
+static void handleWifiGet()    { if (needLogin()) return; webServer.send(200, "text/html", pageWifi()); }
+static void handleVoltageGet() { if (needLogin()) return; webServer.send(200, "text/html", pageVoltage()); }
 
 static void handleLangToggle()
 {
@@ -1183,6 +1245,7 @@ static void handleLangToggle()
 
 static void handleWifiPost()
 {
+    if (needLogin()) return;
     uint8_t mode   = webServer.arg("mode") == "1" ? 1 : 0;    // the page's choice
     int     sw     = webServer.hasArg("swMode") ? 1 : 0;
     String  hssid  = webServer.arg("hssid");
@@ -1263,8 +1326,8 @@ static void handleWifiPost()
     prefs.putBool("configured", anyNet());
     prefs.putUChar("netMode", mode);
     prefs.putUChar("swMode", sw);
-    String qrp = webServer.arg("qrpass");
-    if (qrp.length()) { prefs.putString("qrPass", qrp); g_qrPass = qrp; }
+    String adp = webServer.arg("admpass");
+    if (adp.length()) { prefs.putString("admPass", adp); g_admPass = adp; }
     prefs.putString("hSsid", hssid.length() ? hssid : g_hostSsid);
     if (hpass.length()) prefs.putString("hPass", hpass);
     prefs.putUChar("hCh", hch);
@@ -1310,6 +1373,7 @@ static void handleWifiPost()
 
 static void handleVoltagePost()
 {
+    if (needLogin()) return;
     String ratioStr = webServer.arg("ratio");
     String alarmStr = webServer.arg("alarm");
 
@@ -1379,8 +1443,8 @@ static void loadPrefs()
     g_netModeSet       = g_netMode;
     g_swMode           = prefs.getUChar("swMode",     0);
     g_swMode = g_swMode ? 1 : 0;
-    g_qrPass           = prefs.getString("qrPass",    QR_PASS_DEFAULT);
-    if (!g_qrPass.length()) g_qrPass = QR_PASS_DEFAULT;   // (test builds had 1 / 2 for A / B contacts: both "used")
+    g_admPass          = prefs.getString("admPass",   ADMIN_PASS_DEFAULT);
+    if (!g_admPass.length()) g_admPass = ADMIN_PASS_DEFAULT;   // (test builds had 1 / 2 for A / B contacts: both "used")
     g_hostSsid         = prefs.getString("hSsid",     HOST_SSID_DEFAULT);
     g_hostPass         = prefs.getString("hPass",     HOST_PASS_DEFAULT);
     g_hostCh           = prefs.getUChar("hCh",        HOST_CH_DEFAULT);
@@ -1536,24 +1600,23 @@ void setup()
 
     wifiConnect();
 
-    const char *hdrs[] = {"Referer"};
-    webServer.collectHeaders(hdrs, 1);
+    const char *hdrs[] = {"Referer", "Cookie"};
+    webServer.collectHeaders(hdrs, 2);
 
     webServer.on("/",                    HTTP_GET,  handleRoot);
     webServer.on("/wifi",                HTTP_GET,  handleWifiGet);
     webServer.on("/wifi",                HTTP_POST, handleWifiPost);
     webServer.on("/voltage",             HTTP_GET,  handleVoltageGet);
-    webServer.on("/qr",                  HTTP_GET,  [] { webServer.send(200, "text/html", qrOpen() ? pageQr() : pageQrLogin()); });
-    webServer.on("/qr",                  HTTP_POST, [] {
-        if (qrOpen() || webServer.arg("pw") == g_qrPass) webServer.send(200, "text/html", pageQr());
-        else webServer.send(200, "text/html", pageQrLogin(L("Wrong password.", "パスワードが違います。")));
-    });
+    webServer.on("/qr",                  HTTP_GET,  [] { webServer.send(200, "text/html", pageQr()); });   // no password
+    webServer.on("/login",               HTTP_GET,  [] { webServer.send(200, "text/html", pageLogin()); });
+    webServer.on("/login",               HTTP_POST, handleLoginPost);
+    webServer.on("/logout",              HTTP_GET,  handleLogout);
     webServer.on("/voltage",             HTTP_POST, handleVoltagePost);
     webServer.on("/lang",                HTTP_GET,  handleLangToggle);
     // Firmware update: from the internet (a router, or USB tethering) or a file.
     fwUpdateRoutes(webServer,
         [] { return (!g_hostActive && !apModeActive && WiFi.status() == WL_CONNECTED) || tetherNetif() != nullptr; },
-        htmlHead, [] { return g_langJa; });
+        htmlHead, [] { return g_langJa; }, authed);
     webServer.on("/generate_204",        HTTP_GET,  handleRoot);
     webServer.on("/hotspot-detect.html", HTTP_GET,  handleRoot);
     webServer.on("/ncsi.txt",            HTTP_GET,  handleRoot);

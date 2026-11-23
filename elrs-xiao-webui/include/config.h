@@ -57,6 +57,6 @@
 // internal pull-up, read once at boot. Connected (ON) = host mode.
 #define MODE_SW_PIN      5    // D4
 
-// The QR page's password (asked unless the browser is on the netpack's own
-// WiFi in host mode). Public default: change it on the WiFi page.
-#define QR_PASS_DEFAULT  "admin"
+// The admin password: every page but the QR page asks for it (a login,
+// kept 12 h). Public default: change it on the WiFi page.
+#define ADMIN_PASS_DEFAULT "admin"
