@@ -296,7 +296,10 @@ netpack の XIAO の USB-C に Android スマホをつなぎ、スマホの「US
 **`/wifi` — WiFi 設定**
 - 状態：今のモード・アドレス、MSP の接続元（「タイマーを開く」のリンク）、ホストモードではつながっている機器と USB テザリングの状態
 - 接続方式：クライアント（WiFi に接続）／ホスト（netpack が WiFi を出す）
-- クライアント：SSID とパスワード（空欄なら今のパスワードのまま）
+- クライアント：接続先を **5 つまで**登録（SSID・パスワード。パスワードは表示せず、空欄なら今のまま。SSID を消すと削除）（v2.3.0）
+  - 接続先の選び方：**選んだもの（●）**、または**自動**（登録した中で電波が一番強いもの。つなぐときに周りを探します）
+  - **IP アドレス**：自動（DHCP）または**固定**（IP アドレス・サブネットマスク・ゲートウェイ・DNS。DNS が空欄ならゲートウェイ）。固定はすべての接続先で同じアドレスを使います
+  - v2.2.x までの接続先は、1 件目にそのまま引き継がれます
 - ホスト：SSID・パスワード（8〜63 文字、空欄なら今のまま）・チャンネル（6〜11 ch）
 - USB テザリング：ON / OFF（ホストモードのみ）
 - 接続方式・ホストの WiFi・テザリングを変えると、保存後に再起動します
@@ -340,8 +343,14 @@ netpack の XIAO の USB-C に Android スマホをつなぎ、スマホの「US
 
 | キー | 型 | デフォルト | 説明 |
 |---|---|---|---|
-| `ssid` | String | `ELRS-Netpack-Setup` | WiFi SSID |
-| `wifiPass` | String | `elrs-netpack` | WiFi パスワード |
+| `ss0`〜`ss4` / `sp0`〜`sp4` | String | （空） | クライアントの接続先 1〜5 の SSID / パスワード（v2.3.0） |
+| `nets` | Bool | false | 接続先 5 件の形で保存済み（false なら `ssid` / `wifiPass` を 1 件目に引き継ぎ） |
+| `staSel` | UChar | 0 | 選んだ接続先（0〜4） |
+| `staAuto` | Bool | false | 自動（電波が一番強い接続先） |
+| `ipFix` | Bool | false | IP アドレスを固定 |
+| `ip` / `mask` / `gw` / `dns` | UInt | 0 / 255.255.255.0 / 0 / 0 | 固定する IP アドレス・サブネットマスク・ゲートウェイ・DNS |
+| `ssid` | String | `ELRS-Netpack-Setup` | WiFi SSID（v2.2.x まで） |
+| `wifiPass` | String | `elrs-netpack` | WiFi パスワード（v2.2.x まで） |
 | `configured` | Bool | false | false の場合は初回起動時 STA 接続をスキップ |
 | `vbatRatio` | Float | 2.0 | 電圧分圧比 |
 | `alarmV` | Float | 3.5 | アラーム閾値（V） |

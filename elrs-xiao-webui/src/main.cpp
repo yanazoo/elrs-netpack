@@ -72,6 +72,15 @@ static String   g_hostPass   = HOST_PASS_DEFAULT;
 static uint8_t  g_hostCh     = HOST_CH_DEFAULT;
 static bool     g_tetherEn   = false;   // USB tethering (host mode only)
 
+// Client mode: up to 5 networks (as the timer), joined as selected or, with
+// "automatic", the strongest of them in range; a fixed address if set.
+static const int STA_NETS = 5;
+static String    g_staSsid[STA_NETS], g_staPass[STA_NETS];
+static uint8_t   g_staSel   = 0;        // the selected network
+static bool      g_staAuto  = false;    // automatic: the strongest known in range
+static bool      g_ipFix    = false;
+static IPAddress g_ipAddr, g_ipMask(255, 255, 255, 0), g_ipGw, g_ipDns;
+
 // ── i18n helper ───────────────────────────────────────────────────────────────
 
 static const char *L(const char *en, const char *ja)
@@ -291,6 +300,12 @@ static String htmlHead(const char *title)
          "border-radius:5px;color:#ddd;margin-top:4px;font-size:.95em}"
          ".radio{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:.9em}"
          ".radio input{width:auto;accent-color:#5b9bd5}"
+         ".nets{width:100%;border-collapse:collapse;margin-top:8px;font-size:.88em}"
+         ".nets th{color:#888;font-weight:normal;text-align:left;padding:2px 4px}"
+         ".nets td{padding:2px 4px}.nets td:first-child{width:24px}"
+         ".nets input[type=text],.nets input[type=password]{margin-top:0}"
+         ".nets input[type=radio]{accent-color:#5b9bd5}"
+         ".ipgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}"
          "</style></head><body>";
     h += "<div class='topbar'><h1>ELRS Netpack</h1>";
     h += "<span class='rssi'>"; h += rssiBar(); h += "</span></div>";
@@ -322,12 +337,50 @@ static String htmlEsc(const String &in)
     return out;
 }
 
-static String nvsSsid()
+static bool anyNet()
 {
-    prefs.begin("elrs", true);
-    String s = prefs.getString("ssid", WIFI_SSID);
-    prefs.end();
-    return s;
+    for (int i = 0; i < STA_NETS; i++)
+        if (g_staSsid[i].length()) return true;
+    return false;
+}
+
+// The network to join: the selected one, or (automatic) the strongest saved
+// one in range (a scan, a few seconds). None in range: the selected one.
+static int pickNetwork()
+{
+    int pick = g_staSsid[g_staSel].length() ? g_staSel : -1;
+    if (g_staAuto) {
+        int n = WiFi.scanNetworks(false, false);
+        int best = -1, bestRssi = -1000;
+        for (int i = 0; i < n; i++)
+            for (int k = 0; k < STA_NETS; k++)
+                if (g_staSsid[k].length() && g_staSsid[k] == WiFi.SSID(i) && WiFi.RSSI(i) > bestRssi)
+                    best = k, bestRssi = WiFi.RSSI(i);
+        WiFi.scanDelete();
+        if (best >= 0) {
+            pick = best;
+            LOG.printf("[wifi] automatic: \"%s\" is the strongest (%d dBm)\n", g_staSsid[best].c_str(), bestRssi);
+        } else {
+            LOG.println("[wifi] automatic: no saved network in range");
+        }
+    }
+    for (int i = 0; i < STA_NETS && pick < 0; i++)
+        if (g_staSsid[i].length()) pick = i;
+    return pick;
+}
+
+// Join network i (the fixed address, or DHCP).
+static void staBegin(int i)
+{
+    if (i < 0) return;
+    if (g_ipFix) {
+        if (!WiFi.config(g_ipAddr, g_ipGw, g_ipMask, g_ipDns ? g_ipDns : g_ipGw)) LOG.println("[wifi] fixed address rejected, DHCP");
+        else LOG.printf("[wifi] fixed address %s\n", g_ipAddr.toString().c_str());
+    } else {
+        WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));   // DHCP
+    }
+    LOG.printf("[wifi] connecting to %s\n", g_staSsid[i].c_str());
+    WiFi.begin(g_staSsid[i].c_str(), g_staPass[i].c_str());
 }
 
 // What the netpack is doing now: its WiFi, who sends it MSP (the timer:
@@ -399,12 +452,42 @@ static String pageWifi(const String &msg = "")
     p += ">"; p += L("Host: the netpack's own WiFi (the timer and phones join it)", "ホスト：netpack が WiFi を出す（タイマーやスマホが接続）"); p += "</label>";
 
     p += "<h2>"; p += L("Client", "クライアント"); p += "</h2>";
-    p += "<label>SSID<input type='text' name='ssid' autocomplete='off' value='";
-    p += htmlEsc(nvsSsid()); p += "'></label>";
-    p += "<label>"; p += L("Password", "パスワード");
-    p += "<input type='password' name='pass' autocomplete='new-password' placeholder='";
-    p += L("(leave blank to keep)", "(変更しない場合は空欄)");
-    p += "'></label>";
+    p += "<label>"; p += L("Which network", "接続先の選び方"); p += "<select name='staAuto'>";
+    p += "<option value='0'"; if (!g_staAuto) p += " selected"; p += ">"; p += L("The one selected (●)", "選んだもの（●）"); p += "</option>";
+    p += "<option value='1'"; if (g_staAuto) p += " selected"; p += ">"; p += L("Automatic: the strongest saved one", "自動（登録した中で電波が一番強いもの）"); p += "</option>";
+    p += "</select></label>";
+    p += "<table class='nets'><tr><th>●</th><th>SSID</th><th>"; p += L("Password", "パスワード"); p += "</th></tr>";
+    for (int i = 0; i < STA_NETS; i++) {
+        String n = String(i);
+        p += "<tr><td><input type='radio' name='sel' value='"; p += n; p += "'"; if (i == g_staSel) p += " checked"; p += "></td>";
+        p += "<td><input type='text' name='s"; p += n; p += "' maxlength='32' autocomplete='off' value='"; p += htmlEsc(g_staSsid[i]); p += "'></td>";
+        p += "<td><input type='password' name='p"; p += n; p += "' maxlength='63' autocomplete='new-password' placeholder='";
+        p += g_staPass[i].length() ? L("set", "設定済み") : ""; p += "'></td></tr>";
+    }
+    p += "</table><div class='note'>";
+    p += L("Up to 5. Automatic picks the strongest saved network when joining. Passwords are not shown (blank keeps it). Clear an SSID to delete it.",
+           "5 つまで登録できます。自動は、接続するときに一番電波の強い接続先を選びます。パスワードは表示しません（変えないときは空欄）。SSID を消すと削除されます。");
+    p += "</div>";
+    p += "<label>"; p += L("Address", "IP アドレス"); p += "<select name='ipfix'>";
+    p += "<option value='0'"; if (!g_ipFix) p += " selected"; p += ">"; p += L("Automatic (DHCP)", "自動（DHCP）"); p += "</option>";
+    p += "<option value='1'"; if (g_ipFix) p += " selected"; p += ">"; p += L("Fixed", "固定"); p += "</option>";
+    p += "</select></label>";
+    {
+        const char *names[] = {"ip", "mask", "gw", "dns"};
+        const char *en[] = {"IP address", "Subnet mask", "Gateway", "DNS (blank: the gateway)"};
+        const char *jp[] = {"IP アドレス", "サブネットマスク", "ゲートウェイ", "DNS（空欄ならゲートウェイ）"};
+        IPAddress v[] = {g_ipAddr, g_ipMask, g_ipGw, g_ipDns};
+        p += "<div class='ipgrid'>";
+        for (int k = 0; k < 4; k++) {
+            p += "<label>"; p += L(en[k], jp[k]); p += "<input type='text' name='"; p += names[k]; p += "' inputmode='decimal' value='";
+            if ((uint32_t)v[k]) p += v[k].toString();
+            p += "' placeholder='192.168.1.x'></label>";
+        }
+        p += "</div><div class='note'>";
+        p += L("Fixed: the netpack always has this address on that network (all saved networks use it).",
+               "固定にすると、netpack はいつもこのアドレスになります（登録したすべての接続先で同じアドレスを使います）。");
+        p += "</div>";
+    }
 
     p += "<h2>"; p += L("Host", "ホスト"); p += "</h2>";
     p += "<label>SSID<input type='text' name='hssid' autocomplete='off' maxlength='32' value='";
@@ -474,11 +557,7 @@ static String pageVoltage(const String &msg = "")
 static void startCaptivePortal()
 {
     if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
-    prefs.begin("elrs", true);
-    bool   configured = prefs.getBool("configured", false);
-    String ssid       = prefs.getString("ssid", WIFI_SSID);
-    String pass       = prefs.getString("wifiPass", WIFI_PASSWORD);
-    prefs.end();
+    bool configured = anyNet();
     // With a saved network, keep the station side on (AP+STA) and go on
     // trying it: the netpack used to stay in the setup AP for good when
     // the timer's AP was not up within 30 s of boot, or was off for 60 s.
@@ -488,7 +567,7 @@ static void startCaptivePortal()
     WiFi.softAP(ap_ssid, ap_password);
     if (configured) {
         WiFi.setAutoReconnect(false);
-        WiFi.begin(ssid.c_str(), pass.c_str());
+        staBegin(pickNetwork());
         g_apRetryMs = millis();
     }
     apModeActive = true;
@@ -627,11 +706,7 @@ static void wifiConnect()
     tcpClient.stop();
     beepCancel();  // この後の接続待ちはブロッキングなので、鳴りっぱなしを防ぐ
 
-    prefs.begin("elrs", true);
-    String ssid       = prefs.getString("ssid",     WIFI_SSID);
-    String pass       = prefs.getString("wifiPass", WIFI_PASSWORD);
-    bool   configured = prefs.getBool("configured", false);
-    prefs.end();
+    bool configured = anyNet();
 
     if (g_netMode == 1) {
         startHost();
@@ -644,12 +719,13 @@ static void wifiConnect()
         return;
     }
 
-    LOG.printf("[wifi] connecting to %s\n", ssid.c_str());
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(false);  // 自動再接続は checkWifiState() で制御
+    // Older routers (WPA only): the library refuses below WPA2 by default.
+    WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
     esp_wifi_set_max_tx_power(84);
-    WiFi.begin(ssid.c_str(), pass.c_str());
+    staBegin(pickNetwork());
     builtinLed.on();
 
     uint32_t start = millis();
@@ -698,7 +774,8 @@ static void checkApRetry()
     g_apRetryMs = now;
     if (WiFi.softAPgetStationNum() > 0) return;
     LOG.println("[wifi] setup AP: retrying the saved network");
-    WiFi.reconnect();
+    if (g_staAuto) staBegin(pickNetwork());
+    else WiFi.reconnect();
 }
 
 static void checkWifiState()
@@ -776,8 +853,6 @@ static void handleLangToggle()
 static void handleWifiPost()
 {
     uint8_t mode   = webServer.arg("mode") == "1" ? 1 : 0;
-    String  ssid   = webServer.arg("ssid");
-    String  pass   = webServer.arg("pass");
     String  hssid  = webServer.arg("hssid");
     String  hpass  = webServer.arg("hpass");
     int     hch    = webServer.arg("hch").toInt();
@@ -785,7 +860,34 @@ static void handleWifiPost()
     hssid.trim();
     if (hch < 6 || hch > 11) hch = HOST_CH_DEFAULT;
 
-    if (mode == 0 && ssid.length() == 0) {
+    // The client's networks: a cleared SSID deletes the network; a blank
+    // password keeps the saved one.
+    String ns[STA_NETS], np[STA_NETS];
+    bool anyNew = false;
+    for (int i = 0; i < STA_NETS; i++) {
+        ns[i] = webServer.arg("s" + String(i));
+        ns[i].trim();
+        String pw = webServer.arg("p" + String(i));
+        np[i] = ns[i].length() ? (pw.length() ? pw : g_staPass[i]) : String();
+        if (ns[i].length()) anyNew = true;
+    }
+    int sel = webServer.arg("sel").toInt();
+    if (sel < 0 || sel >= STA_NETS || !ns[sel].length())
+        for (sel = 0; sel < STA_NETS - 1 && !ns[sel].length(); sel++) {}
+    bool staAuto = webServer.arg("staAuto") == "1";
+    bool ipFix = webServer.arg("ipfix") == "1";
+    IPAddress ip, mask, gw, dns;
+    if (ipFix) {
+        String d = webServer.arg("dns");
+        d.trim();
+        if (!ip.fromString(webServer.arg("ip")) || !mask.fromString(webServer.arg("mask")) || !gw.fromString(webServer.arg("gw")) ||
+            (d.length() && !dns.fromString(d)) || !(uint32_t)ip) {
+            webServer.send(200, "text/html", pageWifi(L("Fixed address: enter the IP address, subnet mask and gateway (like 192.168.1.50).",
+                                                         "固定アドレス：IP アドレス・サブネットマスク・ゲートウェイを入れてください（例 192.168.1.50）。")));
+            return;
+        }
+    }
+    if (mode == 0 && !anyNew) {
         webServer.send(200, "text/html", pageWifi(L("SSID cannot be empty.", "SSIDを入力してください。")));
         return;
     }
@@ -803,11 +905,25 @@ static void handleWifiPost()
     bool restart = mode != g_netMode || tether != g_tetherEn ||
                    (mode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh));
     prefs.begin("elrs", false);
-    if (ssid.length()) {
-        prefs.putString("ssid", ssid);
-        prefs.putBool("configured", true);
+    for (int i = 0; i < STA_NETS; i++) {
+        g_staSsid[i] = ns[i];
+        g_staPass[i] = np[i];
+        prefs.putString(("ss" + String(i)).c_str(), ns[i]);
+        prefs.putString(("sp" + String(i)).c_str(), np[i]);
     }
-    if (pass.length() > 0) prefs.putString("wifiPass", pass);
+    g_staSel = sel;
+    g_staAuto = staAuto;
+    g_ipFix = ipFix;
+    if (ipFix) { g_ipAddr = ip; g_ipMask = mask; g_ipGw = gw; g_ipDns = dns; }
+    prefs.putBool("nets", true);   // the 5 networks are saved (the old single one moved)
+    prefs.putUChar("staSel", sel);
+    prefs.putBool("staAuto", staAuto);
+    prefs.putBool("ipFix", ipFix);
+    prefs.putUInt("ip", (uint32_t)g_ipAddr);
+    prefs.putUInt("mask", (uint32_t)g_ipMask);
+    prefs.putUInt("gw", (uint32_t)g_ipGw);
+    prefs.putUInt("dns", (uint32_t)g_ipDns);
+    prefs.putBool("configured", anyNet());
     prefs.putUChar("netMode", mode);
     prefs.putString("hSsid", hssid.length() ? hssid : g_hostSsid);
     if (hpass.length()) prefs.putString("hPass", hpass);
@@ -903,6 +1019,24 @@ static void loadPrefs()
     g_tetherEn         = prefs.getBool("tether",      false);
     if (g_hostCh < 6 || g_hostCh > 11) g_hostCh = HOST_CH_DEFAULT;
     if (!g_hostSsid.length()) g_hostSsid = HOST_SSID_DEFAULT;
+    if (prefs.getBool("nets", false)) {
+        for (int i = 0; i < STA_NETS; i++) {
+            g_staSsid[i] = prefs.getString(("ss" + String(i)).c_str(), "");
+            g_staPass[i] = prefs.getString(("sp" + String(i)).c_str(), "");
+        }
+    } else if (prefs.getBool("configured", false)) {
+        // Before v2.3: one network ("ssid" / "wifiPass"); it becomes the first.
+        g_staSsid[0] = prefs.getString("ssid", WIFI_SSID);
+        g_staPass[0] = prefs.getString("wifiPass", WIFI_PASSWORD);
+    }
+    g_staSel  = prefs.getUChar("staSel", 0);
+    if (g_staSel >= STA_NETS) g_staSel = 0;
+    g_staAuto = prefs.getBool("staAuto", false);
+    g_ipFix   = prefs.getBool("ipFix", false);
+    g_ipAddr  = IPAddress(prefs.getUInt("ip", 0));
+    g_ipMask  = IPAddress(prefs.getUInt("mask", (uint32_t)IPAddress(255, 255, 255, 0)));
+    g_ipGw    = IPAddress(prefs.getUInt("gw", 0));
+    g_ipDns   = IPAddress(prefs.getUInt("dns", 0));
     prefs.end();
 }
 

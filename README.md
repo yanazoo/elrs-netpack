@@ -287,7 +287,10 @@ With an Android phone on the XIAO's USB-C and its "USB tethering" on, the device
 **`/wifi` — WiFi Settings**
 - State: the mode and address, where MSP comes from (with a link to the timer), and in host mode the devices on the WiFi and the USB tethering state
 - Connection: client (joins a WiFi) / host (the netpack's own WiFi)
-- Client: SSID and password (blank keeps the current password)
+- Client: up to **5 networks** (SSID and password; passwords are not shown, blank keeps one; clear an SSID to delete it) (v2.3.0)
+  - Which one: **the selected one (●)**, or **automatic** (the strongest saved network in range, found by a scan when joining)
+  - **Address**: automatic (DHCP) or **fixed** (IP address, subnet mask, gateway, DNS; a blank DNS is the gateway). The fixed address is used on every saved network
+  - The network saved by v2.2.x becomes the first one
 - Host: SSID, password (8-63 characters; blank keeps it) and channel (6-11)
 - USB tethering: on / off (host mode only)
 - Changing the connection, the host's WiFi or tethering restarts the netpack after saving
@@ -333,8 +336,14 @@ All settings survive power cycles (stored in ESP32 flash via Preferences).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `ssid` | String | `ELRS-Netpack-Setup` | WiFi SSID |
-| `wifiPass` | String | `elrs-netpack` | WiFi password |
+| `ss0`–`ss4` / `sp0`–`sp4` | String | (empty) | Client networks 1-5: SSID / password (v2.3.0) |
+| `nets` | Bool | false | The 5 networks are saved (false: `ssid` / `wifiPass` become the first) |
+| `staSel` | UChar | 0 | The selected network (0-4) |
+| `staAuto` | Bool | false | Automatic (the strongest saved network) |
+| `ipFix` | Bool | false | Fixed address |
+| `ip` / `mask` / `gw` / `dns` | UInt | 0 / 255.255.255.0 / 0 / 0 | The fixed IP address, subnet mask, gateway, DNS |
+| `ssid` | String | `ELRS-Netpack-Setup` | WiFi SSID (up to v2.2.x) |
+| `wifiPass` | String | `elrs-netpack` | WiFi password (up to v2.2.x) |
 | `configured` | Bool | false | Skip STA on first boot if false |
 | `vbatRatio` | Float | 2.0 | Voltage divider ratio |
 | `alarmV` | Float | 3.5 | Alarm threshold (V) |
