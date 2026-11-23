@@ -237,12 +237,18 @@ String page(const String &msg = "")
     p += "<div id='ust' class='note' style='font-size:.9em;color:#bbb'></div>";
 
     p += "<h2>"; p += L("From a file", "ファイルから"); p += "</h2>";
-    p += "<form method='POST' action='/update' enctype='multipart/form-data'>";
+    p += "<form id='ff' method='POST' action='/update' enctype='multipart/form-data'>";
     p += "<label>"; p += L("firmware.bin of elrs-xiao-webui (in the release zip, or elrs-netpack-xiao_esp32s3-firmware.bin)",
                            "elrs-xiao-webui の firmware.bin（リリースの zip の中、または elrs-netpack-xiao_esp32s3-firmware.bin）");
     p += "<input type='file' name='fw' accept='.bin'></label>";
-    p += "<button type='submit'>"; p += L("Write the file", "ファイルで更新"); p += "</button>";
-    p += "</form><div class='note'>";
+    p += "<button type='submit' id='fb'>"; p += L("Write the file", "ファイルで更新"); p += "</button>";
+    p += "</form>";
+    // Progress while the file is written (the netpack writes it as it arrives).
+    p += "<div id='fp' style='display:none;margin-top:12px'>"
+         "<div style='height:14px;background:#2a2a2a;border-radius:7px;overflow:hidden'>"
+         "<div id='fpb' style='height:100%;width:0;background:#5b9bd5;transition:width .3s'></div></div>"
+         "<div id='fst' style='margin-top:6px;font-size:.95em;color:#ddd'></div></div>";
+    p += "<div class='note'>";
     p += L("It restarts when done (about 30 s). Settings are kept.", "書き込みが終わると再起動します（約 30 秒）。設定はそのまま残ります。");
     p += "</div>";
 
@@ -261,6 +267,22 @@ String page(const String &msg = "")
          "if(s.state==='updating'){st(T('Writing… ','書き込み中… ')+s.pct+'%');continue;}"
          "if(s.state==='done'){st(T('Written. Restarting…','書き込みました。再起動します…'));continue;}"
          "if(s.state==='failed'){st(T('Failed: ','失敗：')+s.error);return;}return;}}"
+         "const ff=document.getElementById('ff'),fpb=document.getElementById('fpb'),fst=t=>document.getElementById('fst').textContent=t;"
+         "async function back(){for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,2000));"
+         "try{const r=await fetch('/api/update',{cache:'no-store'});if(r.ok){fst(T('Done. Reloading…','完了しました。読み直します…'));setTimeout(()=>location.href='/update',800);return;}}catch(e){}}"
+         "fst(T('It does not answer: reload the page.','応答がありません。ページを読み直してください。'));}"
+         "ff.onsubmit=e=>{e.preventDefault();const f=ff.querySelector('input[type=file]').files[0];"
+         "if(!f){alert(T('Choose a file.','ファイルを選んでください。'));return;}"
+         "if(!confirm(T('Write '+f.name+'? The netpack restarts.',f.name+' を書き込みます。netpack は再起動します。よろしいですか？')))return;"
+         "document.getElementById('fb').disabled=true;document.getElementById('fp').style.display='';fst(T('Writing… 0%','書き込み中… 0%'));"
+         "const x=new XMLHttpRequest();x.open('POST','/update?ajax=1');"
+         "x.upload.onprogress=v=>{if(v.lengthComputable){const q=Math.floor(v.loaded*100/v.total);fpb.style.width=q+'%';"
+         "fst((q<100?T('Writing… ','書き込み中… '):T('Finishing… ','仕上げ中… '))+q+'%');}};"
+         "x.onload=()=>{let j={};try{j=JSON.parse(x.responseText);}catch(e){}"
+         "if(j.ok){fpb.style.width='100%';fst(T('Written. Restarting… (about 30 s)','書き込みました。再起動しています…（約 30 秒）'));back();}"
+         "else{fst(T('Failed: ','失敗：')+(j.error||x.status));document.getElementById('fb').disabled=false;}};"
+         "x.onerror=()=>{fst(T('Connection lost (it may still be restarting).','接続が切れました（再起動中の可能性があります）'));back();};"
+         "const fd=new FormData();fd.append('fw',f);x.send(fd);};"
          "async function chk(){st(T('Checking…','確認しています…'));const r=await fetch('/api/update/check',{method:'POST'});"
          "if(!r.ok){const j=await r.json().catch(()=>({}));st(j.reason==='offline'?T('Not on the internet','インターネットにつながっていません'):T('Busy','実行中です'));return;}poll();}"
          "async function upd(){if(!confirm(T('Write ','')+ub.textContent.replace('⬇️ ','')+T('? The netpack restarts.','。netpack は再起動します。よろしいですか？')))return;"
@@ -293,6 +315,13 @@ void handleUploadDone()
 {
     bool ok = uploadBegan && uploadOk;
     uploadBegan = false;
+    if (g_web->hasArg("ajax")) {   // the page's progress bar
+        String e = ok ? "" : String(Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"));
+        e.replace("\"", "'");
+        g_web->send(200, "application/json", ok ? String("{\"ok\":true}") : "{\"ok\":false,\"error\":\"" + e + "\"}");
+        if (ok) { delay(800); ESP.restart(); }
+        return;
+    }
     if (!ok) {
         g_web->send(200, "text/html", page(String(L("Update failed: ", "更新できませんでした：")) +
                                            (Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"))));

@@ -56,3 +56,7 @@
 // Mode switch (optional, ticked on the WiFi page): D4 / GPIO5 to GND,
 // internal pull-up, read once at boot. Connected (ON) = host mode.
 #define MODE_SW_PIN      5    // D4
+
+// The QR page's password (asked unless the browser is on the netpack's own
+// WiFi in host mode). Public default: change it on the WiFi page.
+#define QR_PASS_DEFAULT  "admin"
