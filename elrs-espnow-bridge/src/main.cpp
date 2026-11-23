@@ -574,6 +574,10 @@ void setup()
     // WiFi in STA mode but NOT connected to any AP — ESP-NOW only
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+#if CONFIG_SOC_WIFI_SUPPORT_5G || CONFIG_IDF_TARGET_ESP32C5
+    // Dual-band chips (ESP32-C5): 2.4 GHz only, as the backpacks.
+    esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
+#endif
     esp_wifi_set_max_tx_power(84);  // 84 * 0.25 = 21 dBm (max for ESP32)
     esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
     Serial.printf("[wifi] channel fixed to %d\n", ESPNOW_CHANNEL);
