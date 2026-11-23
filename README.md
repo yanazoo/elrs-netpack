@@ -190,6 +190,13 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 
 **USB tethering**: on / off (host mode only).
 
+**Mode switch** (v2.3.0): host or client mode chosen by a switch on the box.
+- On the settings page, "物理スイッチ" (mode switch): **none (default) / A contact / B contact**.
+- Wire it between **D4 (GPIO5) and GND** (internal pull-up, no resistor).
+- **Switch ON = host mode, OFF = client mode.** An A contact closes when ON, a B contact opens when ON.
+- It is read **at start-up only**: after switching, power-cycle (or restart). Switching while running does nothing.
+- While a switch is set, it decides the mode over the page's choice (kept for when the switch is set to none). The page shows the switch and the mode at this start-up.
+
 Changing the connection, the host's WiFi or tethering restarts the netpack after saving.
 
 > **WiFi channel**: ESP-NOW is fixed on **channel 1** (the ELRS VRx backpack's). Keep the router the netpack joins, and the host-mode WiFi, on 2.4 GHz **channels 6-11** (1-4 compete with the OSD).
@@ -261,6 +268,7 @@ Settings → ELRS Backpack General
 | GPIO9 | D10 | LED anode (+ 100 Ω → GND) |
 | GPIO21 | — | Built-in LED (active-LOW, on board) |
 | GPIO43 | D6 | Log out (UART0 TX, while USB tethering is on) |
+| GPIO5 | D4 | Mode switch (optional; other side to GND, internal pull-up) (v2.3.0) |
 
 > **Important:** always put a **100 Ω** resistor in series with the notification LED (to protect GPIO9).
 
@@ -351,7 +359,8 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `netMode` | UChar | 0 | Connection (0 = client, 1 = host) |
+| `netMode` | UChar | 0 | Connection (0 = client, 1 = host); the mode switch, when set, decides instead |
+| `swMode` | UChar | 0 | Mode switch (0 = none, 1 = A contact, 2 = B contact) |
 | `ss0`–`ss4` / `sp0`–`sp4` | String | (empty) | Client networks 1-5: SSID / password (v2.3.0) |
 | `nets` | Bool | false | The 5 networks are saved (false: `ssid` / `wifiPass` become the first) |
 | `staSel` | UChar | 0 | The selected network (0-4) |

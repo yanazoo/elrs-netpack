@@ -52,3 +52,9 @@
 // is kept for FPV C5 Lap Timer at all times.
 #define HOST_PHONES_DEFAULT 5
 #define HOST_PHONES_MAX     (HOST_MAX_STA - 1)
+
+// Mode switch (optional, set on the WiFi page): D4 / GPIO5 to GND, internal
+// pull-up. ON = host mode, OFF = client mode, read once at boot.
+// A contact (normally open): ON closes it (LOW). B contact (normally
+// closed): ON opens it (HIGH).
+#define MODE_SW_PIN      5    // D4

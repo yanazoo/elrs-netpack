@@ -73,7 +73,10 @@ Print *g_log = &Serial;
 // Host mode: the netpack's own WiFi. The timer (client mode) and the phones
 // join it; the MSP from the timer goes on to the ESP-NOW bridge as ever.
 // With USB tethering, a phone on the USB port takes it out to the internet.
-static uint8_t  g_netMode    = 0;       // 0 = client (joins a WiFi), 1 = host
+static uint8_t  g_netMode    = 0;       // 0 = client (joins a WiFi), 1 = host (as running)
+static uint8_t  g_netModeSet = 0;       // the mode chosen on the page
+static uint8_t  g_swMode     = 0;       // mode switch: 0 none, 1 A contact, 2 B contact
+static int8_t   g_swOn       = -1;      // the switch at boot: 1 on (host), 0 off, -1 not used
 static bool     g_hostActive = false;   // host mode running
 static String   g_hostSsid   = HOST_SSID_DEFAULT;
 static String   g_hostPass   = HOST_PASS_DEFAULT;
@@ -501,10 +504,27 @@ static String pageWifi(const String &msg = "")
     if (msg.length()) { p += "<div class='msg'>"; p += msg; p += "</div>"; }
     p += "<form method='POST' action='/wifi'>";
     p += "<h2>"; p += L("Connection", "接続方式"); p += "</h2>";
-    p += "<label class='radio'><input type='radio' name='mode' value='0'"; if (g_netMode == 0) p += " checked";
+    p += "<label class='radio'><input type='radio' name='mode' value='0'"; if (g_netModeSet == 0) p += " checked";
     p += ">"; p += L("Client: join a WiFi (FPV C5 Lap Timer's or a router's)", "クライアント：WiFi に接続（FPV C5 Lap Timer やルーター）"); p += "</label>";
-    p += "<label class='radio'><input type='radio' name='mode' value='1'"; if (g_netMode == 1) p += " checked";
+    p += "<label class='radio'><input type='radio' name='mode' value='1'"; if (g_netModeSet == 1) p += " checked";
     p += ">"; p += L("Host: the netpack's own WiFi (FPV C5 Lap Timer and phones join it)", "ホスト：netpack が WiFi を出す（FPV C5 Lap Timer やスマホが接続）"); p += "</label>";
+    p += "<label>"; p += L("Mode switch (physical)", "物理スイッチ（モードの切り替え）"); p += "<select name='swMode'>";
+    {
+        const char *en[] = {"None (the choice above)", "Yes: A contact (normally open)", "Yes: B contact (normally closed)"};
+        const char *jp[] = {"なし（上の選択で決める）", "あり：a 接点（ON で閉じる）", "あり：b 接点（ON で開く）"};
+        for (int k = 0; k < 3; k++) {
+            p += "<option value='"; p += String(k); p += "'"; if (k == g_swMode) p += " selected";
+            p += ">"; p += L(en[k], jp[k]); p += "</option>";
+        }
+    }
+    p += "</select></label><div class='note'>";
+    p += L("Wire it between D4 (GPIO5) and GND (internal pull-up). Switch ON = host mode, OFF = client mode. Read at start-up only: a change takes effect at the next restart. While a switch is set, it decides the mode over the choice above.",
+           "D4（GPIO5）と GND の間につなぎます（内部プルアップ）。スイッチ ON でホストモード、OFF でクライアントモード。読むのは起動したときだけで、切り替えは次の再起動から。スイッチ「あり」の間は、上の選択よりスイッチが優先されます。");
+    if (g_swMode) {
+        p += "<br><b>"; p += L("At this start-up: switch ", "今回の起動：スイッチ "); p += g_swOn ? "ON" : "OFF";
+        p += L(" → ", " → "); p += g_netMode ? L("host mode", "ホストモード") : L("client mode", "クライアントモード"); p += "</b>";
+    }
+    p += "</div>";
 
     p += "<h2>"; p += L("Client", "クライアント"); p += "</h2>";
     p += "<label>"; p += L("Which network", "接続先の選び方"); p += "<select name='staAuto'>";
@@ -1139,7 +1159,9 @@ static void handleLangToggle()
 
 static void handleWifiPost()
 {
-    uint8_t mode   = webServer.arg("mode") == "1" ? 1 : 0;
+    uint8_t mode   = webServer.arg("mode") == "1" ? 1 : 0;    // the page's choice
+    int     sw     = webServer.arg("swMode").toInt();
+    if (sw < 0 || sw > 2) sw = 0;
     String  hssid  = webServer.arg("hssid");
     String  hpass  = webServer.arg("hpass");
     int     hch    = webServer.arg("hch").toInt();
@@ -1176,7 +1198,7 @@ static void handleWifiPost()
             return;
         }
     }
-    if (mode == 0 && !anyNew) {
+    if (mode == 0 && !sw && !anyNew) {
         webServer.send(200, "text/html", pageWifi(L("SSID cannot be empty.", "SSIDを入力してください。")));
         return;
     }
@@ -1191,8 +1213,11 @@ static void handleWifiPost()
     // A change of mode, of the host's WiFi or of tethering: restart (the
     // WiFi and the USB port start afresh). The client's network alone:
     // join it now, as before.
-    bool restart = mode != g_netMode || tether != g_tetherEn ||
-                   (mode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh || hmax != g_hostPhones));
+    // With the mode switch set, the switch decides the mode (at start-up):
+    // the page's choice is only kept for when it's taken off.
+    uint8_t runMode = sw ? g_netMode : mode;
+    bool restart = sw != g_swMode || runMode != g_netMode || tether != g_tetherEn ||
+                   (runMode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh || hmax != g_hostPhones));
     prefs.begin("elrs", false);
     for (int i = 0; i < STA_NETS; i++) {
         g_staSsid[i] = ns[i];
@@ -1214,13 +1239,15 @@ static void handleWifiPost()
     prefs.putUInt("dns", (uint32_t)g_ipDns);
     prefs.putBool("configured", anyNet());
     prefs.putUChar("netMode", mode);
+    prefs.putUChar("swMode", sw);
     prefs.putString("hSsid", hssid.length() ? hssid : g_hostSsid);
     if (hpass.length()) prefs.putString("hPass", hpass);
     prefs.putUChar("hCh", hch);
     prefs.putUChar("hMax", hmax);
     prefs.putBool("tether", tether);
     prefs.end();
-    g_netMode = mode;
+    g_netModeSet = mode;
+    g_netMode = runMode;
     if (hssid.length()) g_hostSsid = hssid;
     if (hpass.length()) g_hostPass = hpass;
     g_hostCh = hch;
@@ -1229,9 +1256,14 @@ static void handleWifiPost()
     if (restart) {
         String p = htmlHead(L("WiFi Settings", "WiFi設定"));
         p += "<div class='msg'>";
-        p += mode == 1 ? L("Saved. Restarting in host mode: join the WiFi ", "保存しました。ホストモードで再起動します。WiFi ")
-                       : L("Saved. Restarting in client mode.", "保存しました。クライアントモードで再起動します。");
-        if (mode == 1) { p += htmlEsc(g_hostSsid); p += L(" and open http://192.168.4.1", " に接続して http://192.168.4.1 を開いてください"); }
+        if (sw) {
+            p += L("Saved. Restarting: the mode switch decides host (ON) or client (OFF) mode.",
+                   "保存しました。再起動します。ホストモードかクライアントモードかは物理スイッチで決まります（ON でホスト、OFF でクライアント）。");
+        } else {
+            p += mode == 1 ? L("Saved. Restarting in host mode: join the WiFi ", "保存しました。ホストモードで再起動します。WiFi ")
+                           : L("Saved. Restarting in client mode.", "保存しました。クライアントモードで再起動します。");
+            if (mode == 1) { p += htmlEsc(g_hostSsid); p += L(" and open http://192.168.4.1", " に接続して http://192.168.4.1 を開いてください"); }
+        }
         p += "</div></body></html>";
         webServer.send(200, "text/html", p);
         beepShort();
@@ -1239,7 +1271,7 @@ static void handleWifiPost()
         ESP.restart();
         return;
     }
-    if (mode == 1) {   // host mode, nothing of it changed
+    if (runMode == 1) {   // host mode, nothing of it changed
         webServer.send(200, "text/html", pageWifi(L("Saved.", "保存しました。")));
         beepShort();
         return;
@@ -1294,6 +1326,22 @@ static void handleNotFound()
 
 // ── Prefs / Voltage / LED ─────────────────────────────────────────────────────
 
+// The mode switch, read once at boot: it decides host or client mode over
+// the page's choice. Changing it later takes effect at the next restart.
+static void readModeSwitch()
+{
+    if (!g_swMode) return;
+    pinMode(MODE_SW_PIN, INPUT_PULLUP);
+    delay(20);
+    int low = 0;
+    for (int i = 0; i < 5; i++) { low += digitalRead(MODE_SW_PIN) == LOW; delay(5); }
+    bool closed = low >= 3;
+    g_swOn = (g_swMode == 1) ? closed : !closed;   // A: ON closes it; B: ON opens it
+    g_netMode = g_swOn ? 1 : 0;
+    LOG.printf("[boot] mode switch (%s contact): %s → %s mode\n", g_swMode == 1 ? "A" : "B", g_swOn ? "ON" : "OFF",
+               g_netMode ? "host" : "client");
+}
+
 static void loadPrefs()
 {
     prefs.begin("elrs", true);
@@ -1304,6 +1352,9 @@ static void loadPrefs()
     g_ledEnabled       = prefs.getBool("ledEn",       true);
     g_langJa           = prefs.getBool("langJa",      true);
     g_netMode          = prefs.getUChar("netMode",    0) == 1 ? 1 : 0;
+    g_netModeSet       = g_netMode;
+    g_swMode           = prefs.getUChar("swMode",     0);
+    if (g_swMode > 2) g_swMode = 0;
     g_hostSsid         = prefs.getString("hSsid",     HOST_SSID_DEFAULT);
     g_hostPass         = prefs.getString("hPass",     HOST_PASS_DEFAULT);
     g_hostCh           = prefs.getUChar("hCh",        HOST_CH_DEFAULT);
@@ -1433,6 +1484,7 @@ void setup()
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
     loadPrefs();
+    readModeSwitch();
 
     // WiFi 切断を即座に検知してフラグを立てる（loop() 先頭で FIN 送信）
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
