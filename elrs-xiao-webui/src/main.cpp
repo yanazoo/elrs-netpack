@@ -385,10 +385,35 @@ static void staBegin(int i)
 
 // What the netpack is doing now: its WiFi, who sends it MSP (the timer:
 // a link to its page), the devices on its WiFi, the USB tethering.
+// FPV C5 Lap Timer's address: the one sending MSP, else looked up by its
+// mDNS name on the same WiFi (cached 20 s: a lookup waits up to 0.6 s).
+static IPAddress g_lapIp;
+static uint32_t  g_lapAt = 0;
+static IPAddress findLapTimer()
+{
+    if (tcpClient && tcpClient.connected()) return tcpClient.remoteIP();
+    if (apModeActive) return IPAddress();   // the setup WiFi: no mDNS
+    if (g_lapAt && millis() - g_lapAt < 20000) return g_lapIp;
+    g_lapIp = MDNS.queryHost("fpv-c5-lt", 600);
+    g_lapAt = millis() | 1;
+    return g_lapIp;
+}
+
 static String statusCard()
 {
     String p = "<div class='card st'>";
     char b[96];
+    {
+        IPAddress lt = findLapTimer();
+        p += "<b>FPV C5 Lap Timer</b>：";
+        if ((uint32_t)lt) {
+            String u = "http://" + lt.toString() + "/";
+            p += "<a href='"; p += u; p += "' target='_blank'>"; p += u; p += "</a>（";
+            p += "<a href='"; p += u; p += "' target='_blank'>"; p += L("open", "開く"); p += "</a>）<br>";
+        } else {
+            p += L("not found (join it to the same WiFi)", "見つかりません（同じ WiFi につないでください）"); p += "<br>";
+        }
+    }
     if (g_hostActive) {
         snprintf(b, sizeof b, "%s ch%u", htmlEsc(g_hostSsid).c_str(), g_hostCh);
         p += L("Host mode: ", "ホストモード："); p += b; p += "（192.168.4.1）<br>";
@@ -400,8 +425,7 @@ static String statusCard()
     }
     if (tcpClient && tcpClient.connected()) {
         String ip = tcpClient.remoteIP().toString();
-        p += L("MSP from ", "MSP の接続元："); p += ip;
-        p += " — <a href='http://"; p += ip; p += "/' target='_blank'>"; p += L("open the timer", "タイマーを開く"); p += "</a><br>";
+        p += L("MSP: connected (", "MSP：接続中（"); p += ip; p += L(")", "）"); p += "<br>";
     } else {
         p += L("MSP: not connected", "MSP：未接続"); p += "<br>";
     }
@@ -447,9 +471,9 @@ static String pageWifi(const String &msg = "")
     p += "<form method='POST' action='/wifi'>";
     p += "<h2>"; p += L("Connection", "接続方式"); p += "</h2>";
     p += "<label class='radio'><input type='radio' name='mode' value='0'"; if (g_netMode == 0) p += " checked";
-    p += ">"; p += L("Client: join a WiFi (the timer's or a router's)", "クライアント：WiFi に接続（タイマーやルーター）"); p += "</label>";
+    p += ">"; p += L("Client: join a WiFi (FPV C5 Lap Timer's or a router's)", "クライアント：WiFi に接続（FPV C5 Lap Timer やルーター）"); p += "</label>";
     p += "<label class='radio'><input type='radio' name='mode' value='1'"; if (g_netMode == 1) p += " checked";
-    p += ">"; p += L("Host: the netpack's own WiFi (the timer and phones join it)", "ホスト：netpack が WiFi を出す（タイマーやスマホが接続）"); p += "</label>";
+    p += ">"; p += L("Host: the netpack's own WiFi (FPV C5 Lap Timer and phones join it)", "ホスト：netpack が WiFi を出す（FPV C5 Lap Timer やスマホが接続）"); p += "</label>";
 
     p += "<h2>"; p += L("Client", "クライアント"); p += "</h2>";
     p += "<label>"; p += L("Which network", "接続先の選び方"); p += "<select name='staAuto'>";
@@ -502,8 +526,8 @@ static String pageWifi(const String &msg = "")
     }
     p += "</select></label>";
     p += "<div class='note'>";
-    p += L("The timer joins this WiFi in client mode (its netpack address: auto). Phones open the timer at its address shown above. Up to 10 devices, the timer included.",
-           "タイマーはクライアントモードでこの WiFi に接続します（netpack アドレスは auto）。スマホからは上の「タイマーを開く」でタイマーの画面を開けます。接続はタイマーを含めて 10 台まで。");
+    p += L("FPV C5 Lap Timer joins this WiFi in client mode (its netpack address: auto). Phones open it from its link at the top. Up to 10 devices, FPV C5 Lap Timer included.",
+           "FPV C5 Lap Timer はクライアントモードでこの WiFi に接続します（netpack アドレスは auto）。スマホからは、上の「FPV C5 Lap Timer」のリンクで画面を開けます。接続は FPV C5 Lap Timer を含めて 10 台まで。");
     p += "</div>";
     p += "<div class='chk'><input type='checkbox' name='tether' value='1'"; if (g_tetherEn) p += " checked";
     p += "><span>"; p += L("USB tethering: a phone on the USB port takes this WiFi to the internet", "USB テザリング：USB につないだスマホから、この WiFi をインターネットへ"); p += "</span></div>";

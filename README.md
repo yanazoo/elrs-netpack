@@ -38,17 +38,17 @@ A lap timer (**FPV C5 Lap Timer** or **RotorHazard**) sends MSP packets (the gog
    ELRS VRx backpacks (goggles), radios' backpacks
 ```
 
-**Why two boards?** An ESP32 has one 2.4 GHz radio. WiFi (a router or the timer's WiFi) and ESP-NOW (fixed on ch 1) on one board don't share a channel and packets get lost. Splitting the roles over two boards joined by UART solves it.
+**Why two boards?** An ESP32 has one 2.4 GHz radio. WiFi (a router or FPV C5 Lap Timer's WiFi) and ESP-NOW (fixed on ch 1) on one board don't share a channel and packets get lost. Splitting the roles over two boards joined by UART solves it.
 
-> FPV C5 Lap Timer can also take the bridge **wired straight to the timer over UART** (no netpack XIAO; see the timer's [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)). The netpack is for a bridge that can't sit next to the timer, and for RotorHazard.
+> FPV C5 Lap Timer can also take the bridge **wired straight to FPV C5 Lap Timer over UART** (no netpack XIAO; see FPV C5 Lap Timer's [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)). The netpack is for a bridge that can't sit next to FPV C5 Lap Timer, and for RotorHazard.
 
 ---
 
 ## Two ways to run it
 
-**A. Client mode (default)** — the netpack XIAO joins the timer's WiFi (a timer in host mode) or the venue's router. The timer (or RotorHazard) finds the netpack as `elrs-netpack.local` and connects to TCP 8080.
+**A. Client mode (default)** — the netpack XIAO joins FPV C5 Lap Timer's WiFi (FPV C5 Lap Timer in host mode) or the venue's router. FPV C5 Lap Timer (or RotorHazard) finds the netpack as `elrs-netpack.local` and connects to TCP 8080.
 
-**B. Host mode (v2.2.0)** — the netpack XIAO runs its own WiFi; the timer (client mode) and phones join it. A setup built around the netpack. An Android phone on its USB port can take this WiFi to the internet with **USB tethering** ([below](#host-mode-and-usb-tethering)).
+**B. Host mode (v2.2.0)** — the netpack XIAO runs its own WiFi; FPV C5 Lap Timer (client mode) and phones join it. A setup built around the netpack. An Android phone on its USB port can take this WiFi to the internet with **USB tethering** ([below](#host-mode-and-usb-tethering)).
 
 ```
  phones (viewers, admin) ──┐
@@ -164,7 +164,7 @@ No source edits: everything is set on the web pages.
 
 1. After writing, the netpack XIAO runs the setup WiFi **`ELRS-NETpack-Setup`** (password `elrs-netpack`). Join it from a phone or PC and the settings page opens (else `http://192.168.4.1/`).
 2. On "**WiFi**" pick the connection and save.
-   - **Client**: the SSID and password of the network to join (the timer's WiFi or a router); up to 5.
+   - **Client**: the SSID and password of the network to join (FPV C5 Lap Timer's WiFi or a router); up to 5.
    - **Host**: the SSID, password and channel of the netpack's own WiFi.
 3. Later, open `http://elrs-netpack.local/` (client mode, or its address), or `http://192.168.4.1/` in host mode.
 
@@ -174,16 +174,16 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 
 ## WiFi settings (`/wifi`)
 
-**State**: the mode and address, where MSP comes from (with "**タイマーを開く**", open the timer), the firmware version; in host mode the devices on the WiFi and the USB tethering state.
+**State**: at the top, a link to **FPV C5 Lap Timer**'s screen (the MSP peer, or `fpv-c5-lt.local` looked up on the same WiFi; "not found" otherwise); then the mode and address, the MSP connection, the firmware version; in host mode the devices on the WiFi and the USB tethering state.
 
 **Client mode** (v2.3.0)
 - Up to **5 networks** (SSID, password). Passwords are not shown (blank keeps one); clear an SSID to delete it.
 - **Which one**: **the selected one (●)**, or **automatic** (a scan when joining; the strongest saved network in range).
-- **Address**: automatic (DHCP) or **fixed** (IP address, subnet mask, gateway, DNS; a blank DNS is the gateway). The fixed address is used on every saved network; put it in the timer's "netpack address" for an instant connection.
+- **Address**: automatic (DHCP) or **fixed** (IP address, subnet mask, gateway, DNS; a blank DNS is the gateway). The fixed address is used on every saved network; put it in FPV C5 Lap Timer's "netpack address" for an instant connection.
 - When no network can be joined, the setup WiFi (`ELRS-NETpack-Setup`) comes up and the netpack retries every 15 s. When a joined network drops, it reconnects every 10 s and brings the setup WiFi up after 60 s.
 - The network saved by v2.2.x becomes the first one.
 
-**Host mode**: SSID, password (8-63 characters), channel (6-11). Up to 10 devices, the timer included.
+**Host mode**: SSID, password (8-63 characters), channel (6-11). Up to 10 devices, FPV C5 Lap Timer included.
 
 **USB tethering**: on / off (host mode only).
 
@@ -199,14 +199,14 @@ Changing the connection, the host's WiFi or tethering restarts the netpack after
 
 1. Under "接続方式" (connection) pick **Host**, enter the host SSID, password (8-63 characters) and channel (6-11), and save. The netpack restarts with that WiFi (defaults: SSID `ELRS-NETpack`, password `elrs-netpack`, ch 6).
 2. The settings page is at `http://192.168.4.1/` (or `http://elrs-netpack.local/`).
-3. Put the timer in **client mode** with this SSID and password. Leave its netpack address at `auto`: it finds the netpack as `elrs-netpack.local`.
-4. Phones join the same WiFi; "**タイマーを開く**" (open the timer) on the netpack's page links to the timer (the address its MSP comes from).
-5. Up to **10 devices**, the timer included. The page lists the devices on the WiFi with their signal.
+3. Put FPV C5 Lap Timer in **client mode** with this SSID and password. Leave its netpack address at `auto`: it finds the netpack as `elrs-netpack.local`.
+4. Phones join the same WiFi; the "**FPV C5 Lap Timer**" link at the top of the netpack's page opens its screen (the MSP peer, or `fpv-c5-lt.local` found on the same WiFi).
+5. Up to **10 devices**, FPV C5 Lap Timer included. The page lists the devices on the WiFi with their signal.
 6. To go back, pick "Client" and save.
 
 **USB tethering** (host mode only)
 
-With an Android phone on the XIAO's USB-C and its "USB tethering" on, the devices on the netpack's WiFi (timer, phones) reach the internet through the phone's mobile data (the timer's update check and online update, for instance).
+With an Android phone on the XIAO's USB-C and its "USB tethering" on, the devices on the netpack's WiFi (FPV C5 Lap Timer, phones) reach the internet through the phone's mobile data (FPV C5 Lap Timer's update check and online update, for instance).
 
 - Tick "**USB テザリング**" (USB tethering) on the WiFi settings page and save (off by default).
 - On the phone: Settings → Network & internet → Hotspot & tethering → **USB tethering** (names vary). RNDIS (most Android phones) and CDC-NCM / ECM (newer Pixels and others) work. **iPhones do not.**
@@ -227,7 +227,7 @@ With an Android phone on the XIAO's USB-C and its "USB tethering" on, the device
 
 **FPV C5 Lap Timer** (Settings → ELRS OSD)
 - Connection: **"WiFi（elrs-netpack XIAO, TCP）"**
-- netpack address: `auto` (a timer in host mode looks among the devices on its WiFi; in client mode it looks up `elrs-netpack.local`). With a fixed netpack address, that IP can go here directly.
+- netpack address: `auto` (FPV C5 Lap Timer in host mode looks among the devices on its WiFi; in client mode it looks up `elrs-netpack.local`). With a fixed netpack address, that IP can go here directly.
 - "ELRS netpack 接続中" (connected) on the settings screen means it works.
 
 **RotorHazard** (Raspberry Pi)
@@ -267,7 +267,7 @@ Settings → ELRS Backpack General
 
 | Feature | Description |
 |---|---|
-| TCP MSP bridge | TCP 8080 ⇄ UART; a new connection replaces the old one (a timer that restarted or rejoined) |
+| TCP MSP bridge | TCP 8080 ⇄ UART; a new connection replaces the old one (FPV C5 Lap Timer restarted or rejoined) |
 | Web settings | WiFi, voltage and update pages; Japanese / English |
 | WiFi (client) | 5 networks (selected / automatic), fixed address, setup WiFi (captive portal) when none can be joined |
 | WiFi (host) | The netpack's own WiFi (SSID, password, ch 6-11), up to 10 devices, DNS relay |
@@ -381,7 +381,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 |---|---|
 | The netpack doesn't join the WiFi | Join the setup WiFi (`ELRS-NETpack-Setup`) and check the SSID and password; the router must offer 2.4 GHz (5 GHz only won't do) |
 | `elrs-netpack.local` not found | Same network? Fix the netpack's address and use that IP |
-| The timer doesn't show "ELRS netpack 接続中" | The timer's connection ("WiFi（elrs-netpack XIAO, TCP）"), its netpack address (`auto` or the IP), "MSP from" on the netpack's page |
+| FPV C5 Lap Timer doesn't show "ELRS netpack 接続中" | FPV C5 Lap Timer's connection ("WiFi（elrs-netpack XIAO, TCP）"), its netpack address (`auto` or the IP), the "MSP" line on the netpack's page |
 | No OSD in the goggles | The bridge wiring (TX/RX crossed, GND), the bridge's boot log, the bind phrase matching the goggles, the ESP-NOW channel (1) |
 | OSD drops or lags | Router / host WiFi on ch 6-11; the bridge's antenna (fit the XIAO C3 / C5 antenna) |
 | USB tethering stays at "waiting for a phone" | The OTG adapter on the XIAO side; power through the 5V pin (VBUS needs 5 V) |

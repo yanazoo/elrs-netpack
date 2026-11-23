@@ -38,17 +38,17 @@
    ELRS VRx バックパック（ゴーグル）・送信機のバックパック
 ```
 
-**なぜ 2 台必要か？** ESP32 の 2.4 GHz 無線は 1 つだけです。WiFi（ルーターやタイマーの WiFi）と ESP-NOW（ch 1 固定）を 1 台で同時に使うと、チャンネルが合わずパケットが落ちます。役割を 2 台に分けて UART でつなぐことで、この問題を解決しています。
+**なぜ 2 台必要か？** ESP32 の 2.4 GHz 無線は 1 つだけです。WiFi（ルーターや FPV C5 Lap Timer の WiFi）と ESP-NOW（ch 1 固定）を 1 台で同時に使うと、チャンネルが合わずパケットが落ちます。役割を 2 台に分けて UART でつなぐことで、この問題を解決しています。
 
-> FPV C5 Lap Timer は、ブリッジを**タイマーに UART で直結**して使うこともできます（netpack の XIAO は不要。タイマーの [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)）。netpack は、ブリッジをタイマーの近くに置けない場合や、RotorHazard で使う場合の構成です。
+> FPV C5 Lap Timer では、ブリッジを **本体に UART で直結**して使うこともできます（netpack の XIAO は不要。FPV C5 Lap Timer の [docs/ELRS_UART_SETUP.md](https://github.com/yanazoo/FPV-C5-Lap-Timer/blob/main/docs/ELRS_UART_SETUP.md)）。netpack は、ブリッジを FPV C5 Lap Timer の近くに置けない場合や、RotorHazard で使う場合の構成です。
 
 ---
 
 ## 使い方の 2 つの形
 
-**A. クライアントモード（初期値）** — netpack の XIAO が、タイマーの WiFi（ホストモードのタイマー）や会場のルーターに接続します。タイマー（または RotorHazard）は netpack を `elrs-netpack.local` で見つけて TCP 8080 につなぎます。
+**A. クライアントモード（初期値）** — netpack の XIAO が、FPV C5 Lap Timer の WiFi（ホストモードの FPV C5 Lap Timer）や会場のルーターに接続します。FPV C5 Lap Timer（または RotorHazard）は netpack を `elrs-netpack.local` で見つけて TCP 8080 につなぎます。
 
-**B. ホストモード（v2.2.0）** — netpack の XIAO が自分の WiFi を出し、タイマー（クライアントモード）とスマホがそこに接続します。netpack を中心にした構成です。USB につないだ Android スマホの**USB テザリング**で、この WiFi からインターネットへ出ることもできます（[下記](#ホストモードと-usb-テザリング)）。
+**B. ホストモード（v2.2.0）** — netpack の XIAO が自分の WiFi を出し、FPV C5 Lap Timer（クライアントモード）とスマホがそこに接続します。netpack を中心にした構成です。USB につないだ Android スマホの**USB テザリング**で、この WiFi からインターネットへ出ることもできます（[下記](#ホストモードと-usb-テザリング)）。
 
 ```
  スマホ（観戦・管理）──┐
@@ -164,7 +164,7 @@ netpack の XIAO（初回起動・WiFi 未設定時）：
 
 1. 書き込み後、netpack の XIAO は設定用の WiFi **`ELRS-NETpack-Setup`**（パスワード `elrs-netpack`）を出します。スマホや PC で接続すると設定ページが開きます（開かないときは `http://192.168.4.1/`）。
 2. 「**WiFi 設定**」で接続方式を選んで保存します。
-   - **クライアント**：接続先（タイマーの WiFi やルーター）の SSID とパスワード。5 つまで登録できます。
+   - **クライアント**：接続先（FPV C5 Lap Timer の WiFi やルーター）の SSID とパスワード。5 つまで登録できます。
    - **ホスト**：netpack が出す WiFi の SSID・パスワード・チャンネル。
 3. つながったあとは `http://elrs-netpack.local/`（クライアントモード。またはそのアドレス）、ホストモードでは `http://192.168.4.1/` で設定ページを開けます。
 
@@ -174,16 +174,16 @@ netpack の XIAO（初回起動・WiFi 未設定時）：
 
 ## WiFi の設定（`/wifi`）
 
-**状態**：今のモード・アドレス、MSP の接続元（「**タイマーを開く**」のリンク）、ファームの版。ホストモードでは、つながっている機器と USB テザリングの状態。
+**状態**：いちばん上に「**FPV C5 Lap Timer**」の画面へのリンク（MSP の接続元、または同じ WiFi の `fpv-c5-lt.local` を自動で探します。見つからなければ「見つかりません」）。そのほか、今のモード・アドレス、MSP の接続状態、ファームの版。ホストモードでは、つながっている機器と USB テザリングの状態。
 
 **クライアントモード**（v2.3.0）
 - 接続先を **5 つまで**登録できます（SSID・パスワード）。パスワードは表示しません（変えないときは空欄）。SSID を消すと削除されます。
 - **接続先の選び方**：**選んだもの（●）**、または**自動**（つなぐときに周りを探し、登録した中で電波が一番強いもの）。
-- **IP アドレス**：自動（DHCP）または**固定**（IP アドレス・サブネットマスク・ゲートウェイ・DNS。DNS が空欄ならゲートウェイ）。固定は、登録したすべての接続先で同じアドレスを使います。タイマーの「netpack アドレス」にその IP を入れておけば、すぐにつながります。
+- **IP アドレス**：自動（DHCP）または**固定**（IP アドレス・サブネットマスク・ゲートウェイ・DNS。DNS が空欄ならゲートウェイ）。固定は、登録したすべての接続先で同じアドレスを使います。FPV C5 Lap Timer の「netpack アドレス」にその IP を入れておけば、すぐにつながります。
 - どの接続先にもつながらないときは、設定用の WiFi（`ELRS-NETpack-Setup`）を出し、15 秒ごとにつなぎ直します。つながっていた WiFi が切れたときは 10 秒ごとに再接続し、60 秒戻らなければ設定用の WiFi を出します。
 - v2.2.x までの接続先は、1 件目にそのまま引き継がれます。
 
-**ホストモード**：SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）。接続はタイマーを含めて 10 台まで。
+**ホストモード**：SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）。接続は FPV C5 Lap Timer を含めて 10 台まで。
 
 **USB テザリング**：ON / OFF（ホストモードのみ）。
 
@@ -199,14 +199,14 @@ netpack の XIAO（初回起動・WiFi 未設定時）：
 
 1. 「接続方式」で **ホスト** を選び、ホストの SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）を入れて保存します。netpack が再起動し、その WiFi を出します（初期値：SSID `ELRS-NETpack`、パスワード `elrs-netpack`、6 ch）。
 2. 設定ページは `http://192.168.4.1/`（または `http://elrs-netpack.local/`）です。
-3. タイマーは **クライアントモード** で、接続先にこの SSID とパスワードを登録します。netpack アドレスは `auto` のままで、タイマーが `elrs-netpack.local` で netpack を見つけます。
-4. スマホもこの WiFi に接続し、netpack の設定ページの「**タイマーを開く**」（MSP の接続元＝タイマーのアドレス）からタイマーの画面を開けます。
-5. 接続はタイマーを含めて **10 台まで** です。設定ページに、つながっている機器のアドレスと電波の強さが出ます。
+3. FPV C5 Lap Timer は **クライアントモード** で、接続先にこの SSID とパスワードを登録します。netpack アドレスは `auto` のままで、FPV C5 Lap Timer が `elrs-netpack.local` で netpack を見つけます。
+4. スマホもこの WiFi に接続し、netpack の設定ページのいちばん上の「**FPV C5 Lap Timer**」のリンクから、その画面を開けます（MSP の接続元、または同じ WiFi の `fpv-c5-lt.local` を自動で探します）。
+5. 接続は FPV C5 Lap Timer を含めて **10 台まで** です。設定ページに、つながっている機器のアドレスと電波の強さが出ます。
 6. クライアントモードに戻すときは、設定ページで「クライアント」を選んで保存します。
 
 **USB テザリング**（ホストモードのときだけ）
 
-netpack の XIAO の USB-C に Android スマホをつなぎ、スマホの「USB テザリング」を ON にすると、netpack の WiFi につながった機器（タイマー・スマホ）がスマホのモバイル通信でインターネットへ出られます（タイマーの「最新版を確認」・オンライン更新など）。
+netpack の XIAO の USB-C に Android スマホをつなぎ、スマホの「USB テザリング」を ON にすると、netpack の WiFi につながった機器（FPV C5 Lap Timer ・スマホ）がスマホのモバイル通信でインターネットへ出られます（FPV C5 Lap Timer の「最新版を確認」・オンライン更新など）。
 
 - WiFi 設定ページの「**USB テザリング**」にチェックを入れて保存します（初期値 OFF）。
 - スマホ側：「設定 → ネットワークとインターネット → テザリング → **USB テザリング**」を ON（機種により名前が違います）。RNDIS（多くの Android）と CDC-NCM / ECM（新しい Pixel など）に対応しています。**iPhone は非対応**です。
@@ -227,7 +227,7 @@ netpack の XIAO の USB-C に Android スマホをつなぎ、スマホの「US
 
 **FPV C5 Lap Timer**（設定タブ → ELRS OSD）
 - 接続方式：**「WiFi（elrs-netpack XIAO, TCP）」**
-- netpack アドレス：`auto`（ホストモードのタイマーは自分の WiFi につながった機器から、クライアントモードのタイマーは `elrs-netpack.local` で探します）。netpack の IP を固定した場合は、その IP を直接入れることもできます。
+- netpack アドレス：`auto`（ホストモードの FPV C5 Lap Timer は自分の WiFi につながった機器から、クライアントモードの FPV C5 Lap Timer は `elrs-netpack.local` で探します）。netpack の IP を固定した場合は、その IP を直接入れることもできます。
 - 設定画面に「ELRS netpack 接続中」と出れば OK です。
 
 **RotorHazard**（Raspberry Pi）
@@ -267,7 +267,7 @@ Settings → ELRS バックパック 一般設定
 
 | 機能 | 説明 |
 |---|---|
-| TCP MSP ブリッジ | TCP 8080 ⇄ UART。新しい接続が来たら古い接続と入れ替え（タイマーの再起動・つなぎ直し） |
+| TCP MSP ブリッジ | TCP 8080 ⇄ UART。新しい接続が来たら古い接続と入れ替え（FPV C5 Lap Timer の再起動・つなぎ直し） |
 | Web 設定画面 | WiFi・電圧・更新の各ページ。日本語 / 英語の切り替え |
 | WiFi（クライアント） | 接続先 5 件（選択 / 自動）、IP 固定、つながらないときは設定用の WiFi（キャプティブポータル） |
 | WiFi（ホスト） | netpack の WiFi（SSID・パスワード・ch 6〜11）、10 台まで、DNS の中継 |
@@ -381,7 +381,7 @@ UDP のような**コネクションレス送信**です。ブリッジはパイ
 |---|---|
 | netpack が WiFi につながらない | 設定用の WiFi（`ELRS-NETpack-Setup`）に接続して、SSID・パスワードを確認。ルーターは 2.4 GHz を出しているか（5 GHz だけでは不可） |
 | `elrs-netpack.local` が見つからない | 同じネットワークか確認。netpack の IP を固定して、その IP を直接指定 |
-| タイマーに「ELRS netpack 接続中」と出ない | タイマーの接続方式が「WiFi（elrs-netpack XIAO, TCP）」か、netpack アドレス（`auto` か IP）、netpack の設定ページの「MSP の接続元」 |
+| FPV C5 Lap Timer に「ELRS netpack 接続中」と出ない | FPV C5 Lap Timer の接続方式が「WiFi（elrs-netpack XIAO, TCP）」か、netpack アドレス（`auto` か IP）、netpack の設定ページの「MSP」の行 |
 | OSD がゴーグルに表示されない | ブリッジの配線（TX / RX の交差・GND）、ブリッジの起動ログ、バインドフレーズがゴーグル側と一致しているか、ESP-NOW チャンネル（ch 1） |
 | 表示が抜ける・遅れる | ルーター／ホストモードの WiFi を ch 6〜11 に。ブリッジのアンテナ（XIAO C3 / C5 は付属アンテナを接続） |
 | USB テザリングが「スマホ待ち」のまま | OTG 変換アダプターを XIAO 側に挿しているか、5V ピンから給電しているか（VBUS に 5V が必要） |
