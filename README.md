@@ -114,6 +114,17 @@ pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload
 
 The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21)`.
 
+### Using a XIAO ESP32-C5 instead (v2.2.1)
+
+A Seeed Studio XIAO ESP32-C5 works too (PlatformIO env **`xiao_esp32c5`**, pioarduino), wired on the same D7 / D6 as the XIAO C3:
+D7 / GPIO12 (RX) ← host TX, D6 / GPIO11 (TX) → host RX, GND ↔ GND. The C5 can do 5 GHz; the bridge stays on 2.4 GHz channel 1.
+
+```
+pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload
+```
+
+The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO12 TX=GPIO11)`.
+
 ---
 
 ## elrs-xiao-webui — XIAO Firmware (Web UI Edition)
@@ -151,7 +162,7 @@ The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21
 
 | Way | For | How |
 |---|---|---|
-| **Web flasher** (latest) | netpack XIAO, ESP-NOW bridge (C3 / Wrover-E) | Open [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) in Chrome / Edge on a PC and press the device's "書き込む" |
+| **Web flasher** (latest) | netpack XIAO, ESP-NOW bridge (pick XIAO C3 / XIAO C5 / Wrover-E) | Open [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) in Chrome / Edge on a PC and press the device's "書き込む" |
 | **Web flasher** (your own files) | same | Drop .bin files (a test build, an older release) or a release zip on "ファイルを指定して書き込む". Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot |
 | **Online** (a button) | netpack XIAO | netpack settings → "更新" (Update) → "🔍 最新版を確認" → "⬇️ … に更新". Needs the internet (a router in client mode, or USB tethering in host mode) |
 | **A file** | netpack XIAO | netpack settings → "更新" → pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin` or the one in the release zip) |

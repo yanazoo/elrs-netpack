@@ -71,18 +71,16 @@ progress{width:100%;height:14px}
 </div>
 
 <div class="card">
-  <h2>ESP-NOW ブリッジ（XIAO ESP32-C3）</h2>
-  <p>ゴーグルのバックパックへの ESP-NOW 送受信（elrs-espnow-bridge）。</p>
-  <esp-web-install-button manifest="manifest-bridge-c3.json">
-    <button slot="activate" class="btn">書き込む</button>
-    <span slot="unsupported" class="unsupported">このブラウザーでは書き込めません。</span>
-  </esp-web-install-button>
-</div>
-
-<div class="card">
-  <h2>ESP-NOW ブリッジ（ESP32 Wrover-E）</h2>
-  <p>Wrover-E でブリッジを作った場合はこちら。</p>
-  <esp-web-install-button manifest="manifest-bridge-esp32.json">
+  <h2>ESP-NOW ブリッジ</h2>
+  <p>ゴーグルのバックパックへの ESP-NOW 送受信（elrs-espnow-bridge）。使っているボードを選んでください。</p>
+  <div class="row">
+    <label>ハード：<select id="brHw">
+      <option value="manifest-bridge-c3.json">XIAO ESP32-C3</option>
+      <option value="manifest-bridge-c5.json">XIAO ESP32-C5</option>
+      <option value="manifest-bridge-esp32.json">ESP32 Wrover-E</option>
+    </select></label>
+  </div>
+  <esp-web-install-button id="brBtn" manifest="manifest-bridge-c3.json">
     <button slot="activate" class="btn">書き込む</button>
     <span slot="unsupported" class="unsupported">このブラウザーでは書き込めません。</span>
   </esp-web-install-button>
@@ -120,6 +118,7 @@ progress{width:100%;height:14px}
 <p class="note"><a href="https://github.com/yanazoo/elrs-netpack/releases">リリースノート・ビルド済みファイル（GitHub）</a></p>
 </main>
 <script>
+document.getElementById('brHw').addEventListener('change',e=>document.getElementById('brBtn').setAttribute('manifest',e.target.value));
 fetch('version.json').then(r=>r.json()).then(v=>{document.getElementById('ver').textContent='最新のリリース '+v.version;}).catch(()=>{});
 </script>
 <script type="module">
@@ -131,6 +130,7 @@ let devices = [
   {key:"netpack-s3", name:"ELRS Netpack（XIAO ESP32-S3）", chip:"ESP32-S3", offsets:{"bootloader.bin":0x0,"partitions.bin":0x8000,"otadata.bin":0xe000,"firmware.bin":0x10000}},
   {key:"bridge-c3", name:"ESP-NOW ブリッジ（XIAO ESP32-C3）", chip:"ESP32-C3", offsets:{"bootloader.bin":0x0,"partitions.bin":0x8000,"otadata.bin":0xe000,"firmware.bin":0x10000}},
   {key:"bridge-esp32", name:"ESP-NOW ブリッジ（ESP32 Wrover-E）", chip:"ESP32", offsets:{"bootloader.bin":0x1000,"partitions.bin":0x8000,"otadata.bin":0xe000,"firmware.bin":0x10000}},
+  {key:"bridge-c5", name:"ESP-NOW ブリッジ（XIAO ESP32-C5）", chip:"ESP32-C5", offsets:{"bootloader.bin":0x2000,"partitions.bin":0x8000,"otadata.bin":0xe000,"firmware.bin":0x10000}},
 ];
 const $ = id => document.getElementById(id);
 const files = [];   // {name, data: Uint8Array, addr: string}
@@ -147,13 +147,16 @@ function showHint(){
   const o = dev().offsets;
   $("hint").textContent = Object.keys(o).map(k => k + " " + hex(o[k])).join("、");
 }
-// Where a file goes, from its name.
+// Where a file goes, from its name (the device's part names: bootloader,
+// partitions, otadata, firmware, littlefs; a whole image at 0x0).
 function guess(name){
   const n = name.toLowerCase(), o = dev().offsets;
   if (/full|merged|factory/.test(n)) return 0;
-  if (n.includes("bootloader")) return o["bootloader.bin"];
-  if (n.includes("partition")) return o["partitions.bin"];
   if (n.includes("boot_app0") || n.includes("otadata") || n.includes("ota_data")) return o["otadata.bin"];
+  for (const k of Object.keys(o)) {
+    const stem = k.replace(/\.bin$/, "").replace(/s$/, "");
+    if (stem !== "firmware" && stem !== "otadata" && n.includes(stem)) return o[k];
+  }
   return o["firmware.bin"];
 }
 function render(){
@@ -236,7 +239,7 @@ $("go").addEventListener("click", async () => {
     const chip = await loader.main();
     const want = dev().chip;
     // "ESP32-S3 (QFN56) …" / "ESP32-D0WD-V3 …": the family is the start.
-    const fam = chip.startsWith("ESP32-S3") ? "ESP32-S3" : chip.startsWith("ESP32-C3") ? "ESP32-C3" : chip.startsWith("ESP32") ? "ESP32" : chip;
+    const fam = (chip.match(/^ESP32-[A-Z]\d+/) || [chip.startsWith("ESP32") ? "ESP32" : chip])[0];
     if (fam !== want && !confirm("つながった機器は " + chip + " です（選んだ機器は " + want + "）。このまま書き込みますか？")) throw "中止しました";
     $("prog").hidden = false; $("prog").value = 0;
     const total = list.reduce((s, x) => s + x.f.data.length, 0);

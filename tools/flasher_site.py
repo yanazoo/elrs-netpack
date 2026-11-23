@@ -21,7 +21,7 @@ import struct
 import sys
 
 # Second-stage bootloader offset per chip.
-BOOTLOADER_AT = {"ESP32": 0x1000, "ESP32-S3": 0x0, "ESP32-C3": 0x0}
+BOOTLOADER_AT = {"ESP32": 0x1000, "ESP32-S3": 0x0, "ESP32-C3": 0x0, "ESP32-C5": 0x2000}
 
 
 def partitions(path):
@@ -101,6 +101,8 @@ def main():
                os.path.join(br, "xiao_esp32c3"), "elrs-espnow-bridge-%s-xiao_esp32c3-full.bin" % tag),
         device(site, "bridge-esp32", "ESP-NOW ブリッジ（ESP32 Wrover-E）", "ESP32",
                os.path.join(br, "esp32dev"), "elrs-espnow-bridge-%s-esp32dev-full.bin" % tag),
+        device(site, "bridge-c5", "ESP-NOW ブリッジ（XIAO ESP32-C5）", "ESP32-C5",
+               os.path.join(br, "xiao_esp32c5"), "elrs-espnow-bridge-%s-xiao_esp32c5-full.bin" % tag),
     ]
     for d in devices:
         manifest = {
