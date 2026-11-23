@@ -53,7 +53,6 @@
 #define HOST_PHONES_DEFAULT 5
 #define HOST_PHONES_MAX     (HOST_MAX_STA - 1)
 
-// Mode switch (optional, set on the WiFi page): D4 / GPIO5 to GND, internal
-// pull-up, read once at boot. Host mode with the contact closed: an A
-// contact switched ON, a B contact switched OFF.
+// Mode switch (optional, ticked on the WiFi page): D4 / GPIO5 to GND,
+// internal pull-up, read once at boot. Connected (ON) = host mode.
 #define MODE_SW_PIN      5    // D4

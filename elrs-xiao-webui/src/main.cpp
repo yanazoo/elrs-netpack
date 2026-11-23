@@ -75,8 +75,8 @@ Print *g_log = &Serial;
 // With USB tethering, a phone on the USB port takes it out to the internet.
 static uint8_t  g_netMode    = 0;       // 0 = client (joins a WiFi), 1 = host (as running)
 static uint8_t  g_netModeSet = 0;       // the mode chosen on the page
-static uint8_t  g_swMode     = 0;       // mode switch: 0 none, 1 A contact, 2 B contact
-static int8_t   g_swOn       = -1;      // the switch at boot: 1 on (host), 0 off, -1 not used
+static uint8_t  g_swMode     = 0;       // mode switch: 0 not used, 1 used
+static int8_t   g_swOn       = -1;      // the switch at boot: 1 closed (host), 0 open, -1 not used
 static bool     g_hostActive = false;   // host mode running
 static String   g_hostSsid   = HOST_SSID_DEFAULT;
 static String   g_hostPass   = HOST_PASS_DEFAULT;
@@ -508,21 +508,13 @@ static String pageWifi(const String &msg = "")
     p += ">"; p += L("Client: join a WiFi (FPV C5 Lap Timer's or a router's)", "クライアント：WiFi に接続（FPV C5 Lap Timer やルーター）"); p += "</label>";
     p += "<label class='radio'><input type='radio' name='mode' value='1'"; if (g_netModeSet == 1) p += " checked";
     p += ">"; p += L("Host: the netpack's own WiFi (FPV C5 Lap Timer and phones join it)", "ホスト：netpack が WiFi を出す（FPV C5 Lap Timer やスマホが接続）"); p += "</label>";
-    p += "<label>"; p += L("Mode switch (physical)", "物理スイッチ（モードの切り替え）"); p += "<select name='swMode'>";
-    {
-        const char *en[] = {"None (the choice above)", "A contact (ON = host mode)", "B contact (OFF = host mode)"};
-        const char *jp[] = {"なし（上の選択で決める）", "a 接点（ON でホストモード）", "b 接点（OFF でホストモード）"};
-        for (int k = 0; k < 3; k++) {
-            p += "<option value='"; p += String(k); p += "'"; if (k == g_swMode) p += " selected";
-            p += ">"; p += L(en[k], jp[k]); p += "</option>";
-        }
-    }
-    p += "</select></label><div class='note'>";
-    p += L("Between D4 (GPIO5) and GND. Read at start-up (takes effect after a restart).",
-           "D4（GPIO5）と GND の間につなぎます。起動時に読みます（切り替えは再起動後）。");
+    p += "<div class='chk'><input type='checkbox' name='swMode' value='1'"; if (g_swMode) p += " checked";
+    p += "><span>"; p += L("Use a mode switch", "物理スイッチを使う"); p += "</span></div><div class='note'>";
+    p += L("Between D4 (GPIO5) and GND: ON (connected) = host mode, OFF = client mode. Read at start-up (takes effect after a restart).",
+           "D4（GPIO5）と GND の間：ON（つながる）でホストモード、OFF でクライアントモード。起動時に読みます（切り替えは再起動後）。");
     if (g_swMode) {
         p += "<br><b>"; p += L("At this start-up: switch ", "今回の起動：スイッチ "); p += g_swOn ? "ON" : "OFF";
-        p += L(" → ", " → "); p += g_netMode ? L("host mode", "ホストモード") : L("client mode", "クライアントモード"); p += "</b>";
+        p += " → "; p += g_netMode ? L("host mode", "ホストモード") : L("client mode", "クライアントモード"); p += "</b>";
     }
     p += "</div>";
 
@@ -1160,8 +1152,7 @@ static void handleLangToggle()
 static void handleWifiPost()
 {
     uint8_t mode   = webServer.arg("mode") == "1" ? 1 : 0;    // the page's choice
-    int     sw     = webServer.arg("swMode").toInt();
-    if (sw < 0 || sw > 2) sw = 0;
+    int     sw     = webServer.hasArg("swMode") ? 1 : 0;
     String  hssid  = webServer.arg("hssid");
     String  hpass  = webServer.arg("hpass");
     int     hch    = webServer.arg("hch").toInt();
@@ -1335,13 +1326,10 @@ static void readModeSwitch()
     delay(20);
     int low = 0;
     for (int i = 0; i < 5; i++) { low += digitalRead(MODE_SW_PIN) == LOW; delay(5); }
-    bool closed = low >= 3;
-    // Host mode with the contact closed: an A contact when switched ON,
-    // a B contact when OFF.
-    g_swOn = (g_swMode == 1) ? closed : !closed;   // the switch as turned (for the page)
+    bool closed = low >= 3;       // D4 to GND: host mode
+    g_swOn = closed;
     g_netMode = closed ? 1 : 0;
-    LOG.printf("[boot] mode switch (%s contact): %s → %s mode\n", g_swMode == 1 ? "A" : "B", g_swOn ? "ON" : "OFF",
-               g_netMode ? "host" : "client");
+    LOG.printf("[boot] mode switch %s → %s mode\n", closed ? "ON" : "OFF", g_netMode ? "host" : "client");
 }
 
 static void loadPrefs()
@@ -1356,7 +1344,7 @@ static void loadPrefs()
     g_netMode          = prefs.getUChar("netMode",    0) == 1 ? 1 : 0;
     g_netModeSet       = g_netMode;
     g_swMode           = prefs.getUChar("swMode",     0);
-    if (g_swMode > 2) g_swMode = 0;
+    g_swMode = g_swMode ? 1 : 0;   // (test builds had 1 / 2 for A / B contacts: both "used")
     g_hostSsid         = prefs.getString("hSsid",     HOST_SSID_DEFAULT);
     g_hostPass         = prefs.getString("hPass",     HOST_PASS_DEFAULT);
     g_hostCh           = prefs.getUChar("hCh",        HOST_CH_DEFAULT);
