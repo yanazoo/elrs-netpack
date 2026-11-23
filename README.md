@@ -1,4 +1,4 @@
-# ELRS Netpack — TCP → WiFi → ESP-NOW Bridge
+# ELRS Netpack — TCP → WiFi → ELRS Backpack Bridge
 
 English | [日本語](README.ja.md)
 
@@ -162,7 +162,7 @@ The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO12 TX=GPIO11
 
 | Way | For | How |
 |---|---|---|
-| **Web flasher** (latest) | netpack XIAO, ESP-NOW bridge (pick XIAO C3 / XIAO C5 / Wrover-E) | Open [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) in Chrome / Edge on a PC and press the device's "書き込む" |
+| **Web flasher** (latest) | netpack XIAO, ELRS Backpack bridge (pick XIAO C3 / XIAO C5 / Wrover-E) | Open [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) in Chrome / Edge on a PC and press the device's "書き込む" |
 | **Web flasher** (your own files) | same | Drop .bin files (a test build, an older release) or a release zip on "ファイルを指定して書き込む". Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot |
 | **Online** (a button) | netpack XIAO | netpack settings → "更新" (Update) → "🔍 最新版を確認" → "⬇️ … に更新". Needs the internet (a router in client mode, or USB tethering in host mode) |
 | **A file** | netpack XIAO | netpack settings → "更新" → pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin` or the one in the release zip) |
@@ -225,7 +225,7 @@ If flashing fails, enter bootloader mode:
 | Max TX power | 21 dBm (both WiFi and ESP-NOW sides) |
 | Backpack version | Reports firmware version 10.1 to RotorHazard |
 
-### How the ESP-NOW bridge sends (elrs-espnow-bridge)
+### How the ELRS Backpack bridge sends (elrs-espnow-bridge)
 
 Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its own MAC (goggle backpacks only accept OSD packets from that UID) and sends to the ESP-NOW **broadcast** address, without waiting for an ACK and without retries. Each burst for one pilot (all its OSD packets up to the next `SET_SEND_UID`, or 20 ms of quiet) is sent **3 times in a row** (`SEND_REPEATS`).
 
@@ -245,11 +245,11 @@ Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its ow
 
 ### Host mode and USB tethering (v2.2.0)
 
-A setup built around the netpack. Its XIAO runs a WiFi of its own (host mode), and the timer and the phones join it. The timer's MSP goes on as before: UART → ESP-NOW bridge → the goggles' backpack (the bridge is a separate board; its ESP-NOW stays on channel 1).
+A setup built around the netpack. Its XIAO runs a WiFi of its own (host mode), and the timer and the phones join it. The timer's MSP goes on as before: UART → ELRS Backpack bridge → the goggles' backpack (the bridge is a separate board; its ESP-NOW stays on channel 1).
 
 ```
  phones (viewers, admin) ──┐
- FPV C5 Lap Timer ─────────┼── WiFi "ELRS-Netpack" ── netpack XIAO ──UART── ESP-NOW bridge ── goggles
+ FPV C5 Lap Timer ─────────┼── WiFi "ELRS-Netpack" ── netpack XIAO ──UART── ELRS Backpack bridge ── goggles
  (client mode)             ┘     (ch 6-11)              │USB
                                                         └── Android phone (USB tethering) ── internet
 ```
@@ -406,4 +406,4 @@ This project is a fork of the **ELRS Netpack** concept originally designed for t
 - Seeed Studio XIAO ESP32-S3 docs: [wiki.seeedstudio.com](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - This fork: [yanazoo/elrs-netpack](https://github.com/yanazoo/elrs-netpack)
 
-The dual-MCU ESP-NOW bridge approach was developed to resolve the hardware limitation of sharing a single 2.4 GHz radio between WiFi STA and ESP-NOW on the ESP32-S3.
+The dual-MCU ELRS Backpack bridge approach was developed to resolve the hardware limitation of sharing a single 2.4 GHz radio between WiFi STA and ESP-NOW on the ESP32-S3.
