@@ -162,7 +162,7 @@ Bridge:
 
 No source edits: everything is set on the web pages.
 
-1. After writing, the netpack XIAO runs the setup WiFi **`ELRS-Netpack-Setup`** (password `elrs-netpack`). Join it from a phone or PC and the settings page opens (else `http://192.168.4.1/`).
+1. After writing, the netpack XIAO runs the setup WiFi **`ELRS-NETpack-Setup`** (password `elrs-netpack`). Join it from a phone or PC and the settings page opens (else `http://192.168.4.1/`).
 2. On "**WiFi**" pick the connection and save.
    - **Client**: the SSID and password of the network to join (the timer's WiFi or a router); up to 5.
    - **Host**: the SSID, password and channel of the netpack's own WiFi.
@@ -180,7 +180,7 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 - Up to **5 networks** (SSID, password). Passwords are not shown (blank keeps one); clear an SSID to delete it.
 - **Which one**: **the selected one (●)**, or **automatic** (a scan when joining; the strongest saved network in range).
 - **Address**: automatic (DHCP) or **fixed** (IP address, subnet mask, gateway, DNS; a blank DNS is the gateway). The fixed address is used on every saved network; put it in the timer's "netpack address" for an instant connection.
-- When no network can be joined, the setup WiFi (`ELRS-Netpack-Setup`) comes up and the netpack retries every 15 s. When a joined network drops, it reconnects every 10 s and brings the setup WiFi up after 60 s.
+- When no network can be joined, the setup WiFi (`ELRS-NETpack-Setup`) comes up and the netpack retries every 15 s. When a joined network drops, it reconnects every 10 s and brings the setup WiFi up after 60 s.
 - The network saved by v2.2.x becomes the first one.
 
 **Host mode**: SSID, password (8-63 characters), channel (6-11). Up to 10 devices, the timer included.
@@ -368,7 +368,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 
 | | Setup WiFi (client mode, not joined) | Host mode WiFi |
 |---|---|---|
-| SSID | `ELRS-Netpack-Setup` | `ELRS-NETpack` (editable) |
+| SSID | `ELRS-NETpack-Setup` | `ELRS-NETpack` (editable) |
 | Password | `elrs-netpack` | `elrs-netpack` (editable) |
 | IP address | `192.168.4.1` | `192.168.4.1` |
 | Settings URL | `http://192.168.4.1/` | `http://192.168.4.1/` |
@@ -379,7 +379,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 
 | Symptom | What to do |
 |---|---|
-| The netpack doesn't join the WiFi | Join the setup WiFi (`ELRS-Netpack-Setup`) and check the SSID and password; the router must offer 2.4 GHz (5 GHz only won't do) |
+| The netpack doesn't join the WiFi | Join the setup WiFi (`ELRS-NETpack-Setup`) and check the SSID and password; the router must offer 2.4 GHz (5 GHz only won't do) |
 | `elrs-netpack.local` not found | Same network? Fix the netpack's address and use that IP |
 | The timer doesn't show "ELRS netpack 接続中" | The timer's connection ("WiFi（elrs-netpack XIAO, TCP）"), its netpack address (`auto` or the IP), "MSP from" on the netpack's page |
 | No OSD in the goggles | The bridge wiring (TX/RX crossed, GND), the bridge's boot log, the bind phrase matching the goggles, the ESP-NOW channel (1) |

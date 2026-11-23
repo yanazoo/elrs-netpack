@@ -1,7 +1,7 @@
 #pragma once
 
 // WiFi (use NVS values if saved; these are compile-time defaults)
-#define WIFI_SSID        "ELRS-Netpack-Setup"
+#define WIFI_SSID        "ELRS-NETpack-Setup"
 #define WIFI_PASSWORD    "elrs-netpack"
 
 #define TCP_PORT         8080
@@ -24,7 +24,7 @@
 #define VBAT_DEFAULT_ALARM_V  3.5f    // 1S LiPo low-voltage warning threshold
 
 // AP mode (captive portal)
-#define ap_ssid          "ELRS-Netpack-Setup"
+#define ap_ssid          "ELRS-NETpack-Setup"
 #define ap_password      "elrs-netpack"
 
 // Built-in LED (XIAO ESP32-S3: GPIO21, active-LOW)
