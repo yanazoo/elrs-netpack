@@ -95,7 +95,7 @@ def main():
     s3 = os.path.join(root, "elrs-xiao-webui", ".pio", "build", "xiao_esp32s3")
     br = os.path.join(root, "elrs-espnow-bridge", ".pio", "build")
     devices = [
-        device(site, "netpack-s3", "ELRS Netpack（XIAO ESP32-S3）", "ESP32-S3", s3,
+        device(site, "netpack-s3", "ELRS-NETpack（XIAO ESP32-S3）", "ESP32-S3", s3,
                "elrs-netpack-%s-xiao_esp32s3-full.bin" % tag),
         device(site, "bridge-c3", "ELRSバックパック-ブリッジ（XIAO ESP32-C3）", "ESP32-C3",
                os.path.join(br, "xiao_esp32c3"), "elrs-espnow-bridge-%s-xiao_esp32c3-full.bin" % tag),

@@ -2,7 +2,8 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <HardwareSerial.h>
-#include <WebServer.h>
+#include "web.h"
+#include "mdns.h"
 #include <Preferences.h>
 #include <DNSServer.h>
 #include "esp_wifi.h"
@@ -11,6 +12,7 @@
 #include "esp_netif.h"
 #include "usb_tether.h"
 #include "fw_update.h"
+#include "qrcode.h"
 #include "log.h"
 #include "config.h"
 #include "led.h"
@@ -22,13 +24,17 @@
 
 static WiFiServer     tcpServer(TCP_PORT);
 static WiFiClient     tcpClient;
+static volatile uint32_t g_mspPeer = 0;   // the MSP (TCP) peer, 0 = none
+static volatile uint32_t g_lapIp   = 0;   // the last mDNS answer
+// The MSP peer is FPV C5 Lap Timer: it asked the bridge to watch the
+// radios' links (0x0F03), which RotorHazard's plugin never does.
+static volatile bool     g_peerIsLap = false;
 static MSP            mspFromTcp;
 static MSP            mspFromUart;
 static HardwareSerial uart(1);
 
 // ── Web / AP globals ──────────────────────────────────────────────────────────
 
-static WebServer   webServer(80);
 static Preferences prefs;
 static DNSServer   dnsServer;
 
@@ -39,7 +45,23 @@ static bool     g_apRetrySta        = false;
 static uint32_t g_apRetryMs         = 0;
 static const uint32_t AP_RETRY_INTERVAL_MS = 15000;
 static uint32_t g_wifiLostMs        = 0;
+// A short drop (a missed beacon, a router's key change) is reconnected
+// quietly: the buzzer and the LED tell only after WIFI_ALARM_MS without WiFi.
+static const uint32_t WIFI_ALARM_MS = 5000;
+static bool     g_wifiAlarmed       = false;
+static volatile uint8_t g_wifiLostReason = 0;   // the last disconnect's reason (for the log)
 static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラグ（イベントタスク → loop）
+// From the web handlers (AsyncTCP task) to loop(): a beep, joining the
+// client network again.
+static volatile bool     g_beepReq     = false;
+static volatile uint32_t g_reconnectAt = 0;
+// Host mode: a device left our WiFi (event task → loop). If it was FPV C5
+// Lap Timer, its TCP session ends at once (keepalive alone takes ~11 s).
+static volatile bool g_apLeftEvent = false;
+static uint8_t       g_apLeftMac[6];
+static volatile bool g_apJoinEvent = false;   // a device joined our WiFi (event task → loop)
+static volatile uint32_t g_apJoinMs = 0, g_ipLogIp = 0, g_ipLogMs = 0;
+static volatile bool g_ipLogEvent = false;
 
 static bool     g_tcpSessionActive  = false;  // 現在 TCP セッション中か
 static bool     g_tcpEverConnected  = false;  // 一度でも TCP 接続したか
@@ -65,12 +87,34 @@ Print *g_log = &Serial;
 // Host mode: the netpack's own WiFi. The timer (client mode) and the phones
 // join it; the MSP from the timer goes on to the ESP-NOW bridge as ever.
 // With USB tethering, a phone on the USB port takes it out to the internet.
-static uint8_t  g_netMode    = 0;       // 0 = client (joins a WiFi), 1 = host
+static uint8_t  g_netMode    = 0;       // 0 = client (joins a WiFi), 1 = host (as running)
+static uint8_t  g_netModeSet = 0;       // the mode chosen on the page
+static uint8_t  g_swMode     = 0;       // mode switch: 0 not used, 1 used
+static int8_t   g_swOn       = -1;      // the switch at boot: 1 closed (host), 0 open, -1 not used
 static bool     g_hostActive = false;   // host mode running
 static String   g_hostSsid   = HOST_SSID_DEFAULT;
 static String   g_hostPass   = HOST_PASS_DEFAULT;
+static String   g_admPass    = ADMIN_PASS_DEFAULT;  // every page but QR asks for it
+static struct { String t; uint32_t at; } g_tokens[4];   // logged-in browsers (until restart)
+static uint8_t  g_tokNext    = 0;
+static uint16_t g_loginMin   = 720;                  // a login lasts (minutes): 5, 30, 60, 360, 720
+static const uint16_t LOGIN_CHOICES[] = {5, 30, 60, 360, 720};
+static bool authed();
 static uint8_t  g_hostCh     = HOST_CH_DEFAULT;
+static uint8_t  g_hostPhones = HOST_PHONES_DEFAULT;   // phones / PCs besides FPV C5 Lap Timer
+static uint8_t  g_lapMac[6];                          // FPV C5 Lap Timer's (learned from its TCP)
+static bool     g_lapMacKnown = false;
+static bool isLapTimer(const uint8_t *mac);
 static bool     g_tetherEn   = false;   // USB tethering (host mode only)
+
+// Client mode: up to 5 networks (as the timer), joined as selected or, with
+// "automatic", the strongest of them in range; a fixed address if set.
+static const int STA_NETS = 5;
+static String    g_staSsid[STA_NETS], g_staPass[STA_NETS];
+static uint8_t   g_staSel   = 0;        // the selected network
+static bool      g_staAuto  = false;    // automatic: the strongest known in range
+static bool      g_ipFix    = false;
+static IPAddress g_ipAddr, g_ipMask(255, 255, 255, 0), g_ipGw, g_ipDns;
 
 // ── i18n helper ───────────────────────────────────────────────────────────────
 
@@ -214,6 +258,7 @@ static void handlePacketFromTcp(mspPacket_t *pkt)
     }
     if (pkt->function == MSP_ELRS_BACKPACK_SET_BUZZER)
         beepShort();
+    if (pkt->function == 0x0F03) g_peerIsLap = true;   // FPV C5 Lap Timer's link watch
     sendMspToUart(pkt);
 }
 
@@ -250,7 +295,7 @@ static String htmlHead(const char *title)
 {
     String h = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
     h += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
-    h += "<title>"; h += title; h += "</title>";
+    h += "<title>ELRS-NETpack — "; h += title; h += "</title>";
     h += "<style>"
          "*{box-sizing:border-box}"
          "body{background:#181818;color:#d4d4d4;font-family:sans-serif;"
@@ -258,7 +303,7 @@ static String htmlHead(const char *title)
          "h1{font-size:1.25em;color:#f0f0f0;margin:0 0 2px}"
          "h2{font-size:1.05em;color:#aaa;margin:12px 0 4px}"
          ".topbar{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap}"
-         ".rssi{font-size:.78em;color:#666;letter-spacing:.5px}"
+         ".rssi{font-size:.78em;color:#fff;letter-spacing:.5px}"
          "nav{display:flex;align-items:center;gap:10px;margin:6px 0}"
          "nav a{text-decoration:none;color:#5b9bd5;font-size:.9em}"
          "nav a:hover{color:#79b8f3}"
@@ -291,14 +336,22 @@ static String htmlHead(const char *title)
          "border-radius:5px;color:#ddd;margin-top:4px;font-size:.95em}"
          ".radio{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:.9em}"
          ".radio input{width:auto;accent-color:#5b9bd5}"
+         ".nets{width:100%;border-collapse:collapse;margin-top:8px;font-size:.88em}"
+         ".nets th{color:#888;font-weight:normal;text-align:left;padding:2px 4px}"
+         ".nets td{padding:2px 4px}.nets td:first-child{width:24px}"
+         ".nets input[type=text],.nets input[type=password]{margin-top:0}"
+         ".nets input[type=radio]{accent-color:#5b9bd5}"
+         ".ipgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}"
          "</style></head><body>";
-    h += "<div class='topbar'><h1>ELRS Netpack</h1>";
+    h += "<div class='topbar'><h1>ELRS-NETpack</h1>";
     h += "<span class='rssi'>"; h += rssiBar(); h += "</span></div>";
     h += "<nav>";
     h += "<a href='/wifi'>WiFi</a>";
     h += "<a href='/voltage'>"; h += L("Voltage", "電圧"); h += "</a>";
+    h += "<a href='/qr'>QR</a>";
     h += "<a href='/update'>"; h += L("Update", "更新"); h += "</a>";
-    h += "<a class='lang' href='/lang'>"; h += (g_langJa ? "EN" : "JA"); h += "</a>";
+    if (authed()) { h += "<a class='lang' href='/logout' style='margin-left:auto'>"; h += L("Log out", "ログアウト"); h += "</a>"; }
+    h += "<a class='lang' href='/lang'"; if (authed()) h += " style='margin-left:0'"; h += ">"; h += (g_langJa ? "EN" : "JA"); h += "</a>";
     h += "</nav><hr>";
     return h;
 }
@@ -322,20 +375,101 @@ static String htmlEsc(const String &in)
     return out;
 }
 
-static String nvsSsid()
+static bool anyNet()
 {
-    prefs.begin("elrs", true);
-    String s = prefs.getString("ssid", WIFI_SSID);
-    prefs.end();
-    return s;
+    for (int i = 0; i < STA_NETS; i++)
+        if (g_staSsid[i].length()) return true;
+    return false;
+}
+
+// The network to join: the selected one, or (automatic) the strongest saved
+// one in range (a scan, a few seconds). None in range: the selected one.
+static int pickNetwork()
+{
+    int pick = g_staSsid[g_staSel].length() ? g_staSel : -1;
+    if (g_staAuto) {
+        int n = WiFi.scanNetworks(false, false);
+        int best = -1, bestRssi = -1000;
+        for (int i = 0; i < n; i++)
+            for (int k = 0; k < STA_NETS; k++)
+                if (g_staSsid[k].length() && g_staSsid[k] == WiFi.SSID(i) && WiFi.RSSI(i) > bestRssi)
+                    best = k, bestRssi = WiFi.RSSI(i);
+        WiFi.scanDelete();
+        if (best >= 0) {
+            pick = best;
+            LOG.printf("[wifi] automatic: \"%s\" is the strongest (%d dBm)\n", g_staSsid[best].c_str(), bestRssi);
+        } else {
+            LOG.println("[wifi] automatic: no saved network in range");
+        }
+    }
+    for (int i = 0; i < STA_NETS && pick < 0; i++)
+        if (g_staSsid[i].length()) pick = i;
+    return pick;
+}
+
+// Join network i (the fixed address, or DHCP).
+static void staBegin(int i)
+{
+    if (i < 0) return;
+    if (g_ipFix) {
+        if (!WiFi.config(g_ipAddr, g_ipGw, g_ipMask, g_ipDns ? g_ipDns : g_ipGw)) LOG.println("[wifi] fixed address rejected, DHCP");
+        else LOG.printf("[wifi] fixed address %s\n", g_ipAddr.toString().c_str());
+    } else {
+        WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));   // DHCP
+    }
+    LOG.printf("[wifi] connecting to %s\n", g_staSsid[i].c_str());
+    WiFi.begin(g_staSsid[i].c_str(), g_staPass[i].c_str());
 }
 
 // What the netpack is doing now: its WiFi, who sends it MSP (the timer:
 // a link to its page), the devices on its WiFi, the USB tethering.
+// FPV C5 Lap Timer's address, kept by loop() for the pages and the DNS
+// relay (they never wait): the MSP peer, else the last answer of an mDNS
+// lookup for fpv-c5-lt.local made in the background every 30 s.
+
+static IPAddress knownLapTimer()
+{
+    if (g_mspPeer && g_peerIsLap) return IPAddress(g_mspPeer);
+    return IPAddress(g_lapIp);   // RotorHazard sending MSP is not FPV C5 Lap Timer
+}
+
+static void lookUpLapTimer()
+{
+    static mdns_search_once_t *search = nullptr;
+    static uint32_t last = 0;
+    if (search) {
+        mdns_result_t *res = nullptr;
+        uint8_t n = 0;
+        if (!mdns_query_async_get_results(search, 0, &res, &n)) return;   // still asking
+        for (mdns_result_t *r = res; r; r = r->next)
+            for (mdns_ip_addr_t *a = r->addr; a; a = a->next)
+                if (a->addr.type == ESP_IPADDR_TYPE_V4) g_lapIp = a->addr.u_addr.ip4.addr;
+        if (res) mdns_query_results_free(res);
+        mdns_query_async_delete(search);
+        search = nullptr;
+        return;
+    }
+    uint32_t now = millis();
+    if (g_mspPeer || apModeActive || (last && now - last < 30000)) return;
+    last = now;
+    search = mdns_query_async_new("fpv-c5-lt", nullptr, nullptr, MDNS_TYPE_A, 1000, 1, nullptr);
+}
+
 static String statusCard()
 {
     String p = "<div class='card st'>";
     char b[96];
+    {
+        IPAddress lt = knownLapTimer();
+        p += "<b>FPV C5 Lap Timer</b>：";
+        if ((uint32_t)lt) {
+            String u = "http://" + lt.toString() + "/";
+            p += "<a href='"; p += u; p += "' target='_blank'>"; p += u; p += "</a>（";
+            p += "<a href='"; p += u; p += "' target='_blank'>"; p += L("open", "開く"); p += "</a>）<br>";
+        } else {
+            p += L("not found (join it to the same WiFi)", "見つかりません（同じ WiFi につないでください）"); p += "<br>";
+        }
+    }
     if (g_hostActive) {
         snprintf(b, sizeof b, "%s ch%u", htmlEsc(g_hostSsid).c_str(), g_hostCh);
         p += L("Host mode: ", "ホストモード："); p += b; p += "（192.168.4.1）<br>";
@@ -345,23 +479,31 @@ static String statusCard()
         p += L("Client mode: ", "クライアントモード："); p += htmlEsc(WiFi.SSID());
         p += "（"; p += WiFi.localIP().toString(); p += "）<br>";
     }
-    if (tcpClient && tcpClient.connected()) {
-        String ip = tcpClient.remoteIP().toString();
-        p += L("MSP from ", "MSP の接続元："); p += ip;
-        p += " — <a href='http://"; p += ip; p += "/' target='_blank'>"; p += L("open the timer", "タイマーを開く"); p += "</a><br>";
+    if (g_mspPeer) {
+        p += L("MSP: connected (", "MSP：接続中（"); p += IPAddress(g_mspPeer).toString(); p += L(")", "）"); p += "<br>";
     } else {
         p += L("MSP: not connected", "MSP：未接続"); p += "<br>";
     }
     if (g_hostActive) {
         wifi_sta_list_t sl = {};
         esp_wifi_ap_get_sta_list(&sl);
-        p += L("Devices on this WiFi: ", "この WiFi の機器："); p += String(sl.num); p += "<br>";
+        int others = 0;
+        bool lapIn = false;
+        for (int i = 0; i < sl.num; i++) {
+            if (isLapTimer(sl.sta[i].mac)) lapIn = true;
+            else others++;
+        }
+        snprintf(b, sizeof b, "%s%d%s%d / %d%s", L("Devices on this WiFi: ", "この WiFi の機器："), sl.num,
+                 lapIn ? L(" (FPV C5 Lap Timer + phones/PCs ", "（FPV C5 Lap Timer ＋ スマホ・PC ") : L(" (phones/PCs ", "（スマホ・PC "),
+                 others, g_hostPhones, L(")", "）"));
+        p += b; p += "<br>";
         esp_netif_pair_mac_ip_t pairs[HOST_MAX_STA] = {};
         int n = sl.num < HOST_MAX_STA ? sl.num : HOST_MAX_STA;
         for (int i = 0; i < n; i++) memcpy(pairs[i].mac, sl.sta[i].mac, 6);
         if (n) esp_netif_dhcps_get_clients_by_mac(WiFi.AP.netif(), n, pairs);
         for (int i = 0; i < n; i++) {
-            snprintf(b, sizeof b, "・" IPSTR "（%d dBm）<br>", IP2STR(&pairs[i].ip), sl.sta[i].rssi);
+            if (pairs[i].ip.addr) snprintf(b, sizeof b, "・" IPSTR "（%d dBm）<br>", IP2STR(&pairs[i].ip), sl.sta[i].rssi);
+            else snprintf(b, sizeof b, "・%s（%d dBm）<br>", L("no address yet", "アドレス未取得"), sl.sta[i].rssi);
             p += b;
         }
         if (g_tetherEn) {
@@ -393,18 +535,57 @@ static String pageWifi(const String &msg = "")
     if (msg.length()) { p += "<div class='msg'>"; p += msg; p += "</div>"; }
     p += "<form method='POST' action='/wifi'>";
     p += "<h2>"; p += L("Connection", "接続方式"); p += "</h2>";
-    p += "<label class='radio'><input type='radio' name='mode' value='0'"; if (g_netMode == 0) p += " checked";
-    p += ">"; p += L("Client: join a WiFi (the timer's or a router's)", "クライアント：WiFi に接続（タイマーやルーター）"); p += "</label>";
-    p += "<label class='radio'><input type='radio' name='mode' value='1'"; if (g_netMode == 1) p += " checked";
-    p += ">"; p += L("Host: the netpack's own WiFi (the timer and phones join it)", "ホスト：netpack が WiFi を出す（タイマーやスマホが接続）"); p += "</label>";
+    p += "<label class='radio'><input type='radio' name='mode' value='0'"; if (g_netModeSet == 0) p += " checked";
+    p += ">"; p += L("Client: join a WiFi (FPV C5 Lap Timer's or a router's)", "クライアント：WiFi に接続（FPV C5 Lap Timer やルーター）"); p += "</label>";
+    p += "<label class='radio'><input type='radio' name='mode' value='1'"; if (g_netModeSet == 1) p += " checked";
+    p += ">"; p += L("Host: the netpack's own WiFi (FPV C5 Lap Timer and phones join it)", "ホスト：netpack が WiFi を出す（FPV C5 Lap Timer やスマホが接続）"); p += "</label>";
+    p += "<div class='chk'><input type='checkbox' name='swMode' value='1'"; if (g_swMode) p += " checked";
+    p += "><span>"; p += L("Use a mode switch", "物理スイッチを使う"); p += "</span></div><div class='note'>";
+    p += L("Between D4 (GPIO5) and GND: ON (connected) = host mode, OFF = client mode. Read at start-up (takes effect after a restart).",
+           "D4（GPIO5）と GND の間：ON（つながる）でホストモード、OFF でクライアントモード。起動時に読みます（切り替えは再起動後）。");
+    if (g_swMode) {
+        p += "<br><b>"; p += L("At this start-up: switch ", "今回の起動：スイッチ "); p += g_swOn ? "ON" : "OFF";
+        p += " → "; p += g_netMode ? L("host mode", "ホストモード") : L("client mode", "クライアントモード"); p += "</b>";
+    }
+    p += "</div>";
 
     p += "<h2>"; p += L("Client", "クライアント"); p += "</h2>";
-    p += "<label>SSID<input type='text' name='ssid' autocomplete='off' value='";
-    p += htmlEsc(nvsSsid()); p += "'></label>";
-    p += "<label>"; p += L("Password", "パスワード");
-    p += "<input type='password' name='pass' autocomplete='new-password' placeholder='";
-    p += L("(leave blank to keep)", "(変更しない場合は空欄)");
-    p += "'></label>";
+    p += "<label>"; p += L("Which network", "接続先の選び方"); p += "<select name='staAuto'>";
+    p += "<option value='0'"; if (!g_staAuto) p += " selected"; p += ">"; p += L("The one selected (●)", "選んだもの（●）"); p += "</option>";
+    p += "<option value='1'"; if (g_staAuto) p += " selected"; p += ">"; p += L("Automatic: the strongest saved one", "自動（登録した中で電波が一番強いもの）"); p += "</option>";
+    p += "</select></label>";
+    p += "<table class='nets'><tr><th>●</th><th>SSID</th><th>"; p += L("Password", "パスワード"); p += "</th></tr>";
+    for (int i = 0; i < STA_NETS; i++) {
+        String n = String(i);
+        p += "<tr><td><input type='radio' name='sel' value='"; p += n; p += "'"; if (i == g_staSel) p += " checked"; p += "></td>";
+        p += "<td><input type='text' name='s"; p += n; p += "' maxlength='32' autocomplete='off' value='"; p += htmlEsc(g_staSsid[i]); p += "'></td>";
+        p += "<td><input type='password' name='p"; p += n; p += "' maxlength='63' autocomplete='new-password' placeholder='";
+        p += g_staPass[i].length() ? L("set", "設定済み") : ""; p += "'></td></tr>";
+    }
+    p += "</table><div class='note'>";
+    p += L("Up to 5. Automatic picks the strongest saved network when joining. Passwords are not shown (blank keeps it). Clear an SSID to delete it.",
+           "5 つまで登録できます。自動は、接続するときに一番電波の強い接続先を選びます。パスワードは表示しません（変えないときは空欄）。SSID を消すと削除されます。");
+    p += "</div>";
+    p += "<label>"; p += L("Address", "IP アドレス"); p += "<select name='ipfix'>";
+    p += "<option value='0'"; if (!g_ipFix) p += " selected"; p += ">"; p += L("Automatic (DHCP)", "自動（DHCP）"); p += "</option>";
+    p += "<option value='1'"; if (g_ipFix) p += " selected"; p += ">"; p += L("Fixed", "固定"); p += "</option>";
+    p += "</select></label>";
+    {
+        const char *names[] = {"ip", "mask", "gw", "dns"};
+        const char *en[] = {"IP address", "Subnet mask", "Gateway", "DNS (blank: the gateway)"};
+        const char *jp[] = {"IP アドレス", "サブネットマスク", "ゲートウェイ", "DNS（空欄ならゲートウェイ）"};
+        IPAddress v[] = {g_ipAddr, g_ipMask, g_ipGw, g_ipDns};
+        p += "<div class='ipgrid'>";
+        for (int k = 0; k < 4; k++) {
+            p += "<label>"; p += L(en[k], jp[k]); p += "<input type='text' name='"; p += names[k]; p += "' inputmode='decimal' value='";
+            if ((uint32_t)v[k]) p += v[k].toString();
+            p += "' placeholder='192.168.1.x'></label>";
+        }
+        p += "</div><div class='note'>";
+        p += L("Fixed: the netpack always has this address on that network (all saved networks use it).",
+               "固定にすると、netpack はいつもこのアドレスになります（登録したすべての接続先で同じアドレスを使います）。");
+        p += "</div>";
+    }
 
     p += "<h2>"; p += L("Host", "ホスト"); p += "</h2>";
     p += "<label>SSID<input type='text' name='hssid' autocomplete='off' maxlength='32' value='";
@@ -418,9 +599,21 @@ static String pageWifi(const String &msg = "")
         p += ">"; p += String(c); p += " ch</option>";
     }
     p += "</select></label>";
+    p += "<label>"; p += L("Phones / PCs (besides FPV C5 Lap Timer)", "スマホ・PC の接続台数（FPV C5 Lap Timer とは別）"); p += "<select name='hmax'>";
+    for (int c = 1; c <= HOST_PHONES_MAX; c++) {
+        p += "<option value='"; p += String(c); p += "'"; if (c == g_hostPhones) p += " selected";
+        p += ">"; p += String(c); p += L("", " 台"); if (c == HOST_PHONES_DEFAULT) p += L(" (default)", "（初期値）"); p += "</option>";
+    }
+    p += "</select></label>";
     p += "<div class='note'>";
-    p += L("The timer joins this WiFi in client mode (its netpack address: auto). Phones open the timer at its address shown above. Up to 10 devices, the timer included.",
-           "タイマーはクライアントモードでこの WiFi に接続します（netpack アドレスは auto）。スマホからは上の「タイマーを開く」でタイマーの画面を開けます。接続はタイマーを含めて 10 台まで。");
+    p += L("A limit for use as a bridge: one place is always kept free for FPV C5 Lap Timer, and the phones / PCs are limited to this number (default 5, as FPV C5 Lap Timer's own host mode). "
+           "One more is sent off and kept out for 30 s. 10 devices in all at most.",
+           "ブリッジとして使うための制限です。FPV C5 Lap Timer の 1 台分はいつも空けておき、スマホ・PC はこの台数までにします（初期値 5 台。FPV C5 Lap Timer のホストモードと同じ）。"
+           "上限を超えてつないだ機器は外し、30 秒間は入れません。WiFi 全体で最大 10 台です。");
+    p += "</div>";
+    p += "<div class='note'>";
+    p += L("FPV C5 Lap Timer joins this WiFi in client mode (its netpack address: auto). Phones open it from its link at the top. ",
+           "FPV C5 Lap Timer はクライアントモードでこの WiFi に接続します（netpack アドレスは auto）。スマホからは、上の「FPV C5 Lap Timer」のリンクで画面を開けます。");
     p += "</div>";
     p += "<div class='chk'><input type='checkbox' name='tether' value='1'"; if (g_tetherEn) p += " checked";
     p += "><span>"; p += L("USB tethering: a phone on the USB port takes this WiFi to the internet", "USB テザリング：USB につないだスマホから、この WiFi をインターネットへ"); p += "</span></div>";
@@ -428,8 +621,180 @@ static String pageWifi(const String &msg = "")
     p += L("Host mode only. Android: turn on Settings → Network → Hotspot &amp; tethering → USB tethering. While on, the USB port is not a serial port: update from the Update page (or hold BOOT while plugging in).",
            "ホストモードのときだけ動きます。Android は「設定 → ネットワーク → テザリング → USB テザリング」を ON。ON の間は USB でのシリアル・書き込みはできません（書き込みは「更新」ページ、または BOOT を押しながら USB を接続）。");
     p += "</div>";
+    p += "<h2>"; p += L("Admin password", "管理者パスワード"); p += "</h2>";
+    p += "<label>"; p += L("Password (blank keeps it)", "パスワード（変えないときは空欄）");
+    p += "<input type='password' name='admpass' maxlength='32' autocomplete='new-password'></label>";
+    p += "<label>"; p += L("A login lasts", "ログインの有効時間"); p += "<select name='loginmin'>";
+    for (uint16_t m : LOGIN_CHOICES) {
+        p += "<option value='"; p += String(m); p += "'"; if (m == g_loginMin) p += " selected"; p += ">";
+        if (m < 60) { p += String(m); p += L(" min", " 分"); }
+        else { p += String(m / 60); p += L(m == 60 ? " hour" : " hours", " 時間"); }
+        if (m == 720) p += L(" (default)", "（初期値）");
+        p += "</option>";
+    }
+    p += "</select></label>";
+    p += "<div class='note'>";
+    p += L("Asked for every page but QR.", "QR 以外のページを開くときに聞きます。");
+    if (g_admPass == ADMIN_PASS_DEFAULT)
+        p += L("<br><b style='color:#e0a050'>Still the default (admin): change it.</b>",
+               "<br><b style='color:#e0a050'>初期値（admin）のままです。変更してください。</b>");
+    p += "</div>";
     p += "<button type='submit'>"; p += L("Save", "保存"); p += "</button>";
     p += "</form></body></html>";
+    return p;
+}
+
+// ── QR codes ──────────────────────────────────────────────────────────────────
+// Made here (esp_qrcode, no internet needed) and drawn as SVG.
+
+static String *g_qrOut = nullptr;
+
+static void qrToSvg(esp_qrcode_handle_t q)
+{
+    int n = esp_qrcode_get_size(q), m = n + 8;   // a 4-module quiet zone
+    String &o = *g_qrOut;
+    o += "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 "; o += m; o += " "; o += m;
+    o += "' shape-rendering='crispEdges' style='width:220px;height:220px;display:block;margin:8px auto'>";
+    o += "<rect width='100%' height='100%' fill='#fff'/><path fill='#000' d='";
+    char b[24];
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+            if (esp_qrcode_get_module(q, x, y)) {
+                snprintf(b, sizeof b, "M%d %dh1v1h-1z", x + 4, y + 4);
+                o += b;
+            }
+    o += "'/></svg>";
+}
+
+static String qrSvg(const String &text)
+{
+    String out;
+    g_qrOut = &out;
+    esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+    cfg.display_func = qrToSvg;
+    cfg.max_qrcode_version = 10;
+    cfg.qrcode_ecc_level = ESP_QRCODE_ECC_MED;
+    if (esp_qrcode_generate(&cfg, text.c_str()) != ESP_OK) out = "";
+    g_qrOut = nullptr;
+    return out;
+}
+
+// A WiFi QR code's field: \ ; , : " are escaped.
+static String wifiQrEsc(const String &in)
+{
+    String o;
+    for (size_t i = 0; i < in.length(); i++) {
+        char c = in[i];
+        if (c == '\\' || c == ';' || c == ',' || c == ':' || c == '"') o += '\\';
+        o += c;
+    }
+    return o;
+}
+
+// Login: every page but the QR page needs the admin password. A login is a
+// cookie with a random token, kept 12 h (tokens are forgotten at restart).
+static bool authed()
+{
+    String c = webServer.header("Cookie");
+    int i = c.indexOf("np=");
+    if (i < 0) return false;
+    String t = c.substring(i + 3, i + 3 + 16);
+    if (t.length() != 16) return false;
+    uint32_t now = millis();
+    for (auto &k : g_tokens)
+        if (k.t.length() && k.t == t) {
+            if (now - k.at < (uint32_t)g_loginMin * 60000UL) return true;
+            k.t = "";   // expired
+            return false;
+        }
+    return false;
+}
+
+static void toLogin()
+{
+    String next = webServer.uri();
+    if (next == "/login") next = "/wifi";
+    webServer.sendHeader("Location", "/login?next=" + next, true);
+    webServer.send(302, "text/plain", "");
+}
+
+// Checks the login; false (and the browser sent to the login page) without one.
+static bool needLogin()
+{
+    if (authed()) return false;
+    toLogin();
+    return true;
+}
+
+static String pageLogin(const String &msg = "")
+{
+    String p = htmlHead(L("Login", "ログイン"));
+    String next = webServer.arg("next");
+    if (!next.startsWith("/") || next.startsWith("//")) next = "/wifi";
+    p += "<h2>"; p += L("Admin password", "管理者パスワード"); p += "</h2>";
+    if (msg.length()) { p += "<div class='msg alarm'>"; p += msg; p += "</div>"; }
+    p += "<form method='POST' action='/login'><input type='hidden' name='next' value='"; p += htmlEsc(next); p += "'>";
+    p += "<label>"; p += L("Password", "パスワード"); p += "<input type='password' name='pw' autofocus></label>";
+    p += "<button type='submit'>"; p += L("Log in", "ログイン"); p += "</button></form><div class='note'>";
+    p += L("The QR page needs no password. Default password: admin (change it on the WiFi page).",
+           "QR ページはパスワードなしで見られます。初期パスワード：admin（WiFi のページで変更してください）。");
+    p += "</div></body></html>";
+    return p;
+}
+
+static void handleLoginPost()
+{
+    String next = webServer.arg("next");
+    if (!next.startsWith("/") || next.startsWith("//")) next = "/wifi";
+    if (webServer.arg("pw") != g_admPass) {
+        webServer.send(200, "text/html", pageLogin(L("Wrong password.", "パスワードが違います。")));
+        return;
+    }
+    char t[17];
+    snprintf(t, sizeof t, "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
+    g_tokens[g_tokNext].t = t;
+    g_tokens[g_tokNext].at = millis();
+    g_tokNext = (g_tokNext + 1) % 4;
+    webServer.sendHeader("Set-Cookie", String("np=") + t + "; Path=/; Max-Age=" + String((uint32_t)g_loginMin * 60) + "; HttpOnly");
+    webServer.sendHeader("Location", next, true);
+    webServer.send(302, "text/plain", "");
+}
+
+static void handleLogout()
+{
+    String c = webServer.header("Cookie");
+    int i = c.indexOf("np=");
+    if (i >= 0)
+        for (auto &k : g_tokens)
+            if (k.t.length() && k.t == c.substring(i + 3, i + 19)) k.t = "";
+    webServer.sendHeader("Set-Cookie", "np=; Path=/; Max-Age=0");
+    webServer.sendHeader("Location", "/qr", true);
+    webServer.send(302, "text/plain", "");
+}
+
+static String pageQr()
+{
+    String p = htmlHead("QR");
+    const char *pass = g_hostPass.length() >= 8 ? g_hostPass.c_str() : HOST_PASS_DEFAULT;
+    p += "<h2>"; p += L("Join the ELRS-NETpack WiFi", "ELRS-NETpack の WiFi に接続"); p += "</h2>";
+    p += "<div class='card st' style='text-align:center'>";
+    p += qrSvg("WIFI:T:WPA;S:" + wifiQrEsc(g_hostSsid) + ";P:" + wifiQrEsc(pass) + ";;");
+    p += "SSID：<b>"; p += htmlEsc(g_hostSsid); p += "</b><br>";
+    p += L("Password: ", "パスワード："); p += "<b>"; p += htmlEsc(pass); p += "</b>";
+    if (!g_hostActive) {
+        p += "<div class='note'>";
+        p += L("The netpack is in client mode now: this WiFi is up in host mode.", "今はクライアントモードです。この WiFi は、ホストモードにしたときに出ます。");
+        p += "</div>";
+    }
+    p += "</div>";
+    p += "<h2>FPV C5 Lap Timer</h2>";
+    p += "<div class='card st' style='text-align:center'>";
+    p += qrSvg("http://fpv-c5-lt.local/");
+    p += "<a href='http://fpv-c5-lt.local/' target='_blank'>http://fpv-c5-lt.local/</a>";
+    p += "<div class='note'>";
+    p += L("Join the same WiFi first. If the phone can't open .local addresses, use the FPV C5 Lap Timer link (its IP address) at the top of the WiFi page.",
+           "先に同じ WiFi に接続してください。スマホが .local のアドレスを開けないときは、WiFi のページのいちばん上の「FPV C5 Lap Timer」のリンク（IP アドレス）を使ってください。");
+    p += "</div></div></body></html>";
     return p;
 }
 
@@ -474,11 +839,7 @@ static String pageVoltage(const String &msg = "")
 static void startCaptivePortal()
 {
     if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
-    prefs.begin("elrs", true);
-    bool   configured = prefs.getBool("configured", false);
-    String ssid       = prefs.getString("ssid", WIFI_SSID);
-    String pass       = prefs.getString("wifiPass", WIFI_PASSWORD);
-    prefs.end();
+    bool configured = anyNet();
     // With a saved network, keep the station side on (AP+STA) and go on
     // trying it: the netpack used to stay in the setup AP for good when
     // the timer's AP was not up within 30 s of boot, or was off for 60 s.
@@ -488,7 +849,7 @@ static void startCaptivePortal()
     WiFi.softAP(ap_ssid, ap_password);
     if (configured) {
         WiFi.setAutoReconnect(false);
-        WiFi.begin(ssid.c_str(), pass.c_str());
+        staBegin(pickNetwork());
         g_apRetryMs = millis();
     }
     apModeActive = true;
@@ -530,6 +891,56 @@ static int udpSocket(uint16_t port)
     return s;
 }
 
+// The name asked in a DNS query (lower case), or "" if it can't be read.
+static String dnsQueryName(const uint8_t *buf, int n)
+{
+    if (n < 12 || (buf[2] & 0x80) || buf[4] != 0 || buf[5] != 1) return "";
+    String name;
+    int q = 12;
+    while (q < n && buf[q]) {
+        int len = buf[q];
+        if ((len & 0xC0) || q + len + 1 >= n) return "";
+        if (name.length()) name += '.';
+        for (int i = 1; i <= len; i++) name += (char)tolower(buf[q + i]);
+        q += len + 1;
+    }
+    return name;
+}
+
+static int dnsAnswer(uint8_t *buf, int n, int cap, uint32_t addr);
+
+// Turns the query in buf into an answer: A → 192.168.4.1, anything else
+// (AAAA, ...) → no records. Length of the answer, or 0.
+static int dnsAnswerSelf(uint8_t *buf, int n, int cap)
+{
+    return dnsAnswer(buf, n, cap, (uint32_t)IPAddress(192, 168, 4, 1));
+}
+
+// The answer: A → addr; other types → no records; addr 0 → "no such name"
+// (the asker then looks it up itself, by mDNS).
+static int dnsAnswer(uint8_t *buf, int n, int cap, uint32_t addr)
+{
+    if (n < 12 || (buf[2] & 0x80) || buf[4] != 0 || buf[5] != 1) return 0;   // one question
+    int q = 12;
+    while (q < n && buf[q]) {
+        if ((buf[q] & 0xC0) || q + buf[q] + 1 >= n) return 0;
+        q += buf[q] + 1;
+    }
+    q += 1;                       // the name's end
+    if (q + 4 > n) return 0;
+    uint16_t qtype = (buf[q] << 8) | buf[q + 1], qclass = (buf[q + 2] << 8) | buf[q + 3];
+    q += 4;                       // the question ends here (anything after it is dropped)
+    buf[2] = 0x84 | (buf[2] & 0x01);   // response, authoritative, RD as asked
+    buf[3] = addr ? 0x80 : 0x83;       // RA; no error, or NXDOMAIN
+    buf[6] = buf[7] = buf[8] = buf[9] = buf[10] = buf[11] = 0;
+    if (!addr || qtype != 1 || qclass != 1 || q + 16 > cap) return q;   // no records
+    buf[7] = 1;                        // one answer
+    uint8_t ans[16] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4, 0, 0, 0, 0};
+    memcpy(ans + 12, &addr, 4);        // network order, as IPAddress holds it
+    memcpy(buf + q, ans, sizeof ans);
+    return q + 16;
+}
+
 static void dnsRelayBegin()
 {
     if (g_dnsSock < 0) g_dnsSock = udpSocket(53);
@@ -546,12 +957,27 @@ static void dnsRelayPoll()
         socklen_t fl = sizeof from;
         int n = recvfrom(g_dnsSock, buf, sizeof buf, 0, (sockaddr *)&from, &fl);
         if (n < 12) break;
+        // .local names answered here: FPV C5 Lap Timer's real address (so
+        // fpv-c5-lt.local opens it, not us, and works on phones without
+        // mDNS), ourselves, or "no such name" (the asker uses mDNS).
+        String qn = dnsQueryName(buf, n);
+        if (qn.endsWith(".local")) {
+            uint32_t a = 0;
+            if (qn == "elrs-netpack.local") a = (uint32_t)IPAddress(192, 168, 4, 1);
+            else if (qn == "fpv-c5-lt.local") a = (uint32_t)knownLapTimer();
+            int m = dnsAnswer(buf, n, sizeof buf, a);
+            if (m > 0) sendto(g_dnsSock, buf, m, 0, (sockaddr *)&from, fl);
+            continue;
+        }
         TetherInfo t;
         tetherInfo(&t);
         if (t.state != TetherState::Up) {
-            buf[2] |= 0x80;                       // a response
-            buf[3] = (buf[3] & 0xF0) | 0x02;      // SERVFAIL
-            sendto(g_dnsSock, buf, n, 0, (sockaddr *)&from, fl);
+            // No way out: every name is us (as FPV C5 Lap Timer's access
+            // point does). A computer's "is there internet?" check then gets
+            // its answer at once; with "server failure" Windows kept asking
+            // and sat on "checking network requirements" for a long time.
+            int m = dnsAnswerSelf(buf, n, sizeof buf);
+            if (m > 0) sendto(g_dnsSock, buf, m, 0, (sockaddr *)&from, fl);
             continue;
         }
         int slot = -1;
@@ -592,12 +1018,17 @@ static void startHost()
     WiFi.mode(WIFI_AP);
     esp_wifi_set_max_tx_power(84);
     const char *pass = g_hostPass.length() >= 8 ? g_hostPass.c_str() : HOST_PASS_DEFAULT;
-    if (!WiFi.softAP(g_hostSsid.c_str(), pass, g_hostCh, 0, HOST_MAX_STA)) {
-        LOG.printf("[host] ch %u refused — ch %u\n", g_hostCh, HOST_CH_DEFAULT);
-        WiFi.softAP(g_hostSsid.c_str(), pass, HOST_CH_DEFAULT, 0, HOST_MAX_STA);
-    }
+    int maxSta = g_hostPhones + 1;   // FPV C5 Lap Timer + phones / PCs
+    // As FPV C5 Lap Timer's access point: the address and DHCP first, then
+    // the WiFi (set the other way round, DHCP restarted under a running AP).
     IPAddress ip(192, 168, 4, 1);
     WiFi.softAPConfig(ip, ip, IPAddress(255, 255, 255, 0), IPAddress(192, 168, 4, 2), ip);   // DNS: our relay
+    if (!WiFi.softAP(g_hostSsid.c_str(), pass, g_hostCh, 0, maxSta)) {
+        LOG.printf("[host] ch %u refused — ch %u\n", g_hostCh, HOST_CH_DEFAULT);
+        WiFi.softAP(g_hostSsid.c_str(), pass, HOST_CH_DEFAULT, 0, maxSta);
+    }
+    // 20 MHz wide: 40 MHz covers the neighbouring channels for no gain.
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
     apModeActive = false;
     g_hostActive = true;
     builtinLed.off();
@@ -618,6 +1049,84 @@ static void startHost()
     beepDouble();
 }
 
+// Host mode: at most g_hostPhones devices besides FPV C5 Lap Timer, so its
+// place is always free (the access point takes g_hostPhones + 1). A device
+// past the limit is sent off and kept out for 30 s (it would join again at
+// once). FPV C5 Lap Timer is known by the MAC its TCP came from.
+static const uint32_t HOLD_OFF_MS = 30000;
+static struct { uint8_t mac[6]; uint32_t since; bool used; } g_held[4];
+
+static void learnLapMac()
+{
+    if (!g_hostActive || !tcpClient || !tcpClient.connected()) return;
+    uint32_t ip = (uint32_t)tcpClient.remoteIP();
+    wifi_sta_list_t sl = {};
+    if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK || !sl.num) return;
+    esp_netif_pair_mac_ip_t pairs[HOST_MAX_STA] = {};
+    int n = sl.num < HOST_MAX_STA ? sl.num : HOST_MAX_STA;
+    for (int i = 0; i < n; i++) memcpy(pairs[i].mac, sl.sta[i].mac, 6);
+    if (esp_netif_dhcps_get_clients_by_mac(WiFi.AP.netif(), n, pairs) != ESP_OK) return;
+    for (int i = 0; i < n; i++) {
+        if (pairs[i].ip.addr != ip) continue;
+        if (!g_lapMacKnown || memcmp(g_lapMac, pairs[i].mac, 6)) {
+            memcpy(g_lapMac, pairs[i].mac, 6);
+            g_lapMacKnown = true;
+            Preferences pr;   // its own handle: the web handlers use `prefs` on another task
+            pr.begin("elrs", false);
+            pr.putBytes("lapMac", g_lapMac, 6);
+            pr.end();
+            LOG.printf("[host] FPV C5 Lap Timer is " MACSTR "\n", MAC2STR(g_lapMac));
+        }
+        return;
+    }
+}
+
+static bool isLapTimer(const uint8_t *mac) { return g_lapMacKnown && memcmp(mac, g_lapMac, 6) == 0; }
+
+static void sendOff(const uint8_t *mac, const char *why)
+{
+    uint16_t aid = 0;
+    if (esp_wifi_ap_get_sta_aid(mac, &aid) != ESP_OK || !aid) return;
+    LOG.printf("[host] " MACSTR " sent off (%s)\n", MAC2STR(mac), why);
+    esp_wifi_deauth_sta(aid);
+}
+
+static void limitDevices()
+{
+    static uint32_t last = 0;
+    uint32_t now = millis();
+    bool joined = g_apJoinEvent;
+    if (!g_hostActive || (!joined && now - last < 3000)) return;
+    g_apJoinEvent = false;
+    last = now;
+    wifi_sta_list_t sl = {};
+    if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK) return;
+    // Held devices that joined again: out again while the hold lasts.
+    for (int i = 0; i < sl.num; i++)
+        for (auto &h : g_held)
+            if (h.used && now - h.since < HOLD_OFF_MS && memcmp(h.mac, sl.sta[i].mac, 6) == 0)
+                sendOff(sl.sta[i].mac, "held");
+    for (auto &h : g_held)
+        if (h.used && now - h.since >= HOLD_OFF_MS) h.used = false;
+    // Over the limit: the newest devices go (the list is in join order).
+    // Until FPV C5 Lap Timer is known (its first TCP here), the access
+    // point's own limit (phones + 1) does it: it might be the newest.
+    if (!g_lapMacKnown) return;
+    int others = 0;
+    for (int i = 0; i < sl.num; i++)
+        if (!isLapTimer(sl.sta[i].mac) && ++others > g_hostPhones) {
+            int slot = 0;
+            for (int k = 0; k < 4; k++) {
+                if (!g_held[k].used) { slot = k; break; }
+                if ((int32_t)(g_held[k].since - g_held[slot].since) < 0) slot = k;
+            }
+            memcpy(g_held[slot].mac, sl.sta[i].mac, 6);
+            g_held[slot].since = now;
+            g_held[slot].used = true;
+            sendOff(sl.sta[i].mac, "more phones / PCs than set");
+        }
+}
+
 static void wifiConnect()
 {
     // WiFi 切断に伴う TCP 切断はユーザー起因 → beepLong3 を鳴らさず静かにクリア
@@ -627,11 +1136,7 @@ static void wifiConnect()
     tcpClient.stop();
     beepCancel();  // この後の接続待ちはブロッキングなので、鳴りっぱなしを防ぐ
 
-    prefs.begin("elrs", true);
-    String ssid       = prefs.getString("ssid",     WIFI_SSID);
-    String pass       = prefs.getString("wifiPass", WIFI_PASSWORD);
-    bool   configured = prefs.getBool("configured", false);
-    prefs.end();
+    bool configured = anyNet();
 
     if (g_netMode == 1) {
         startHost();
@@ -644,12 +1149,18 @@ static void wifiConnect()
         return;
     }
 
-    LOG.printf("[wifi] connecting to %s\n", ssid.c_str());
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
+    // No modem sleep as a client: dozing between beacons, the station misses
+    // some and the router (or the ESP) takes it for gone (a short drop that
+    // used to set off the WiFi warning while the WiFi was fine). FPV C5 Lap
+    // Timer does the same.
+    WiFi.setSleep(false);
     WiFi.setAutoReconnect(false);  // 自動再接続は checkWifiState() で制御
+    // Older routers (WPA only): the library refuses below WPA2 by default.
+    WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
     esp_wifi_set_max_tx_power(84);
-    WiFi.begin(ssid.c_str(), pass.c_str());
+    staBegin(pickNetwork());
     builtinLed.on();
 
     uint32_t start = millis();
@@ -684,6 +1195,7 @@ static void checkApRetry()
         dnsServer.stop();
         WiFi.softAPdisconnect(true);
         WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
         apModeActive = false;
         g_apRetrySta = false;
         g_wifiLostMs = 0;
@@ -698,7 +1210,8 @@ static void checkApRetry()
     g_apRetryMs = now;
     if (WiFi.softAPgetStationNum() > 0) return;
     LOG.println("[wifi] setup AP: retrying the saved network");
-    WiFi.reconnect();
+    if (g_staAuto) staBegin(pickNetwork());
+    else WiFi.reconnect();
 }
 
 static void checkWifiState()
@@ -710,10 +1223,12 @@ static void checkWifiState()
         if (g_wifiLostMs != 0) {
             // WiFi 復旧 → ブザー即停止 + TCP サーバー・mDNS 再起動
             if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
+            LOG.printf("[wifi] reconnected after %lu ms  IP=%s\n", (unsigned long)(millis() - g_wifiLostMs),
+                       WiFi.localIP().toString().c_str());
             g_wifiLostMs = 0;
-            LOG.printf("[wifi] reconnected IP=%s\n", WiFi.localIP().toString().c_str());
             startNetServices();
-            beepDouble();
+            if (g_wifiAlarmed) beepDouble();   // a short drop passes without a sound
+            g_wifiAlarmed = false;
         }
         return;
     }
@@ -724,25 +1239,33 @@ static void checkWifiState()
     if (g_wifiLostMs == 0) {
         g_wifiLostMs    = now;
         lastReconnectMs = now;
-        LOG.println("[wifi] disconnected — reconnecting");
+        LOG.printf("[wifi] disconnected (reason %u) — reconnecting\n", g_wifiLostReason);
         // WiFi 切断起因の TCP 切断は静かにクリア
         g_tcpSessionActive = false;
         g_tcpEverConnected = false;
         tcpClient.stop();
-        // 5 秒間の警告ブザー開始（電圧アラーム中は重複を避ける）
+        g_wifiAlarmed = false;
+        WiFi.reconnect();
+        return;
+    }
+
+    // Still without WiFi after WIFI_ALARM_MS: now the warning (5 s of
+    // buzzer, the LED blinking fast; not over the voltage alarm).
+    if (!g_wifiAlarmed && now - g_wifiLostMs >= WIFI_ALARM_MS) {
+        g_wifiAlarmed = true;
+        LOG.println("[wifi] still disconnected: warning");
         if (g_buzzerEnabled && !g_alarmActive) {
             buzzerRawOn();
             g_wifiBuzzerActive  = true;
             g_wifiBuzzerStartMs = now;
         }
-        WiFi.reconnect();
-        return;
     }
 
     // 60 秒経過 → AP モード
     if (now - g_wifiLostMs >= 60000) {
         if (g_wifiBuzzerActive) { buzzerRawOff(); g_wifiBuzzerActive = false; }
         g_wifiLostMs = 0;
+        g_wifiAlarmed = false;
         LOG.println("[wifi] 60 s without connection — starting captive portal");
         startCaptivePortal();
         return;
@@ -758,9 +1281,15 @@ static void checkWifiState()
 
 // ── Web handlers ──────────────────────────────────────────────────────────────
 
-static void handleRoot()       { webServer.send(200, "text/html", pageWifi()); }
-static void handleWifiGet()    { webServer.send(200, "text/html", pageWifi()); }
-static void handleVoltageGet() { webServer.send(200, "text/html", pageVoltage()); }
+// The first page: the QR codes in host mode (no password), else WiFi.
+static void handleRoot()
+{
+    if (g_hostActive) { webServer.send(200, "text/html", pageQr()); return; }
+    if (needLogin()) return;
+    webServer.send(200, "text/html", pageWifi());
+}
+static void handleWifiGet()    { if (needLogin()) return; webServer.send(200, "text/html", pageWifi()); }
+static void handleVoltageGet() { if (needLogin()) return; webServer.send(200, "text/html", pageVoltage()); }
 
 static void handleLangToggle()
 {
@@ -775,17 +1304,46 @@ static void handleLangToggle()
 
 static void handleWifiPost()
 {
-    uint8_t mode   = webServer.arg("mode") == "1" ? 1 : 0;
-    String  ssid   = webServer.arg("ssid");
-    String  pass   = webServer.arg("pass");
+    if (needLogin()) return;
+    uint8_t mode   = webServer.arg("mode") == "1" ? 1 : 0;    // the page's choice
+    int     sw     = webServer.hasArg("swMode") ? 1 : 0;
     String  hssid  = webServer.arg("hssid");
     String  hpass  = webServer.arg("hpass");
     int     hch    = webServer.arg("hch").toInt();
+    int     hmax   = webServer.arg("hmax").toInt();
+    if (hmax < 1 || hmax > HOST_PHONES_MAX) hmax = HOST_PHONES_DEFAULT;
     bool    tether = webServer.hasArg("tether");
     hssid.trim();
     if (hch < 6 || hch > 11) hch = HOST_CH_DEFAULT;
 
-    if (mode == 0 && ssid.length() == 0) {
+    // The client's networks: a cleared SSID deletes the network; a blank
+    // password keeps the saved one.
+    String ns[STA_NETS], np[STA_NETS];
+    bool anyNew = false;
+    for (int i = 0; i < STA_NETS; i++) {
+        ns[i] = webServer.arg("s" + String(i));
+        ns[i].trim();
+        String pw = webServer.arg("p" + String(i));
+        np[i] = ns[i].length() ? (pw.length() ? pw : g_staPass[i]) : String();
+        if (ns[i].length()) anyNew = true;
+    }
+    int sel = webServer.arg("sel").toInt();
+    if (sel < 0 || sel >= STA_NETS || !ns[sel].length())
+        for (sel = 0; sel < STA_NETS - 1 && !ns[sel].length(); sel++) {}
+    bool staAuto = webServer.arg("staAuto") == "1";
+    bool ipFix = webServer.arg("ipfix") == "1";
+    IPAddress ip, mask, gw, dns;
+    if (ipFix) {
+        String d = webServer.arg("dns");
+        d.trim();
+        if (!ip.fromString(webServer.arg("ip")) || !mask.fromString(webServer.arg("mask")) || !gw.fromString(webServer.arg("gw")) ||
+            (d.length() && !dns.fromString(d)) || !(uint32_t)ip) {
+            webServer.send(200, "text/html", pageWifi(L("Fixed address: enter the IP address, subnet mask and gateway (like 192.168.1.50).",
+                                                         "固定アドレス：IP アドレス・サブネットマスク・ゲートウェイを入れてください（例 192.168.1.50）。")));
+            return;
+        }
+    }
+    if (mode == 0 && !sw && !anyNew) {
         webServer.send(200, "text/html", pageWifi(L("SSID cannot be empty.", "SSIDを入力してください。")));
         return;
     }
@@ -800,52 +1358,84 @@ static void handleWifiPost()
     // A change of mode, of the host's WiFi or of tethering: restart (the
     // WiFi and the USB port start afresh). The client's network alone:
     // join it now, as before.
-    bool restart = mode != g_netMode || tether != g_tetherEn ||
-                   (mode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh));
+    // With the mode switch set, the switch decides the mode (at start-up):
+    // the page's choice is only kept for when it's taken off.
+    uint8_t runMode = sw ? g_netMode : mode;
+    bool restart = sw != g_swMode || runMode != g_netMode || tether != g_tetherEn ||
+                   (runMode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh || hmax != g_hostPhones));
     prefs.begin("elrs", false);
-    if (ssid.length()) {
-        prefs.putString("ssid", ssid);
-        prefs.putBool("configured", true);
+    for (int i = 0; i < STA_NETS; i++) {
+        g_staSsid[i] = ns[i];
+        g_staPass[i] = np[i];
+        prefs.putString(("ss" + String(i)).c_str(), ns[i]);
+        prefs.putString(("sp" + String(i)).c_str(), np[i]);
     }
-    if (pass.length() > 0) prefs.putString("wifiPass", pass);
+    g_staSel = sel;
+    g_staAuto = staAuto;
+    g_ipFix = ipFix;
+    if (ipFix) { g_ipAddr = ip; g_ipMask = mask; g_ipGw = gw; g_ipDns = dns; }
+    prefs.putBool("nets", true);   // the 5 networks are saved (the old single one moved)
+    prefs.putUChar("staSel", sel);
+    prefs.putBool("staAuto", staAuto);
+    prefs.putBool("ipFix", ipFix);
+    prefs.putUInt("ip", (uint32_t)g_ipAddr);
+    prefs.putUInt("mask", (uint32_t)g_ipMask);
+    prefs.putUInt("gw", (uint32_t)g_ipGw);
+    prefs.putUInt("dns", (uint32_t)g_ipDns);
+    prefs.putBool("configured", anyNet());
     prefs.putUChar("netMode", mode);
+    prefs.putUChar("swMode", sw);
+    {
+        uint16_t lm = webServer.arg("loginmin").toInt();
+        for (uint16_t m : LOGIN_CHOICES)
+            if (m == lm) { g_loginMin = lm; prefs.putUShort("loginMin", lm); }
+    }
+    String adp = webServer.arg("admpass");
+    if (adp.length()) { prefs.putString("admPass", adp); g_admPass = adp; }
     prefs.putString("hSsid", hssid.length() ? hssid : g_hostSsid);
     if (hpass.length()) prefs.putString("hPass", hpass);
     prefs.putUChar("hCh", hch);
+    prefs.putUChar("hMax", hmax);
     prefs.putBool("tether", tether);
     prefs.end();
-    g_netMode = mode;
+    g_netModeSet = mode;
+    g_netMode = runMode;
     if (hssid.length()) g_hostSsid = hssid;
     if (hpass.length()) g_hostPass = hpass;
     g_hostCh = hch;
+    g_hostPhones = hmax;
 
     if (restart) {
         String p = htmlHead(L("WiFi Settings", "WiFi設定"));
         p += "<div class='msg'>";
-        p += mode == 1 ? L("Saved. Restarting in host mode: join the WiFi ", "保存しました。ホストモードで再起動します。WiFi ")
-                       : L("Saved. Restarting in client mode.", "保存しました。クライアントモードで再起動します。");
-        if (mode == 1) { p += htmlEsc(g_hostSsid); p += L(" and open http://192.168.4.1", " に接続して http://192.168.4.1 を開いてください"); }
+        if (sw) {
+            p += L("Saved. Restarting: the mode switch decides host or client mode.",
+                   "保存しました。再起動します。ホストモードかクライアントモードかは物理スイッチで決まります。");
+        } else {
+            p += mode == 1 ? L("Saved. Restarting in host mode: join the WiFi ", "保存しました。ホストモードで再起動します。WiFi ")
+                           : L("Saved. Restarting in client mode.", "保存しました。クライアントモードで再起動します。");
+            if (mode == 1) { p += htmlEsc(g_hostSsid); p += L(" and open http://192.168.4.1", " に接続して http://192.168.4.1 を開いてください"); }
+        }
         p += "</div></body></html>";
         webServer.send(200, "text/html", p);
-        beepShort();
-        delay(800);
-        ESP.restart();
+        g_beepReq = true;
+        webServer.restartSoon(800);
         return;
     }
-    if (mode == 1) {   // host mode, nothing of it changed
+    if (runMode == 1) {   // host mode, nothing of it changed
         webServer.send(200, "text/html", pageWifi(L("Saved.", "保存しました。")));
-        beepShort();
+        g_beepReq = true;
         return;
     }
     webServer.send(200, "text/html",
         pageWifi(L("Saved. Connecting\xe2\x80\xa6", "保存しました。接続中…")));
-    beepShort();
-    delay(420);
-    wifiConnect();
+    g_beepReq = true;
+    g_reconnectAt = (millis() + 420) | 1;   // loop() joins the network (not in the handler)
 }
 
 static void handleVoltagePost()
 {
+    if (needLogin()) return;
     String ratioStr = webServer.arg("ratio");
     String alarmStr = webServer.arg("alarm");
 
@@ -876,7 +1466,7 @@ static void handleVoltagePost()
 
     webServer.send(200, "text/html",
         pageVoltage(L("Settings saved.", "設定を保存しました。")));
-    beepShort();
+    g_beepReq = true;
 }
 
 static void handleNotFound()
@@ -886,6 +1476,21 @@ static void handleNotFound()
 }
 
 // ── Prefs / Voltage / LED ─────────────────────────────────────────────────────
+
+// The mode switch, read once at boot: it decides host or client mode over
+// the page's choice. Changing it later takes effect at the next restart.
+static void readModeSwitch()
+{
+    if (!g_swMode) return;
+    pinMode(MODE_SW_PIN, INPUT_PULLUP);
+    delay(20);
+    int low = 0;
+    for (int i = 0; i < 5; i++) { low += digitalRead(MODE_SW_PIN) == LOW; delay(5); }
+    bool closed = low >= 3;       // D4 to GND: host mode
+    g_swOn = closed;
+    g_netMode = closed ? 1 : 0;
+    LOG.printf("[boot] mode switch %s → %s mode\n", closed ? "ON" : "OFF", g_netMode ? "host" : "client");
+}
 
 static void loadPrefs()
 {
@@ -897,12 +1502,44 @@ static void loadPrefs()
     g_ledEnabled       = prefs.getBool("ledEn",       true);
     g_langJa           = prefs.getBool("langJa",      true);
     g_netMode          = prefs.getUChar("netMode",    0) == 1 ? 1 : 0;
+    g_netModeSet       = g_netMode;
+    g_swMode           = prefs.getUChar("swMode",     0);
+    g_swMode = g_swMode ? 1 : 0;
+    g_admPass          = prefs.getString("admPass",   ADMIN_PASS_DEFAULT);
+    if (!g_admPass.length()) g_admPass = ADMIN_PASS_DEFAULT;
+    g_loginMin = 720;
+    {
+        uint16_t lm = prefs.getUShort("loginMin", 720);
+        for (uint16_t m : LOGIN_CHOICES)
+            if (m == lm) g_loginMin = lm;
+    }   // (test builds had 1 / 2 for A / B contacts: both "used")
     g_hostSsid         = prefs.getString("hSsid",     HOST_SSID_DEFAULT);
     g_hostPass         = prefs.getString("hPass",     HOST_PASS_DEFAULT);
     g_hostCh           = prefs.getUChar("hCh",        HOST_CH_DEFAULT);
     g_tetherEn         = prefs.getBool("tether",      false);
     if (g_hostCh < 6 || g_hostCh > 11) g_hostCh = HOST_CH_DEFAULT;
+    g_hostPhones       = prefs.getUChar("hMax",       HOST_PHONES_DEFAULT);
+    if (g_hostPhones < 1 || g_hostPhones > HOST_PHONES_MAX) g_hostPhones = HOST_PHONES_DEFAULT;
+    g_lapMacKnown      = prefs.getBytes("lapMac", g_lapMac, 6) == 6;
     if (!g_hostSsid.length()) g_hostSsid = HOST_SSID_DEFAULT;
+    if (prefs.getBool("nets", false)) {
+        for (int i = 0; i < STA_NETS; i++) {
+            g_staSsid[i] = prefs.getString(("ss" + String(i)).c_str(), "");
+            g_staPass[i] = prefs.getString(("sp" + String(i)).c_str(), "");
+        }
+    } else if (prefs.getBool("configured", false)) {
+        // Before v2.3: one network ("ssid" / "wifiPass"); it becomes the first.
+        g_staSsid[0] = prefs.getString("ssid", WIFI_SSID);
+        g_staPass[0] = prefs.getString("wifiPass", WIFI_PASSWORD);
+    }
+    g_staSel  = prefs.getUChar("staSel", 0);
+    if (g_staSel >= STA_NETS) g_staSel = 0;
+    g_staAuto = prefs.getBool("staAuto", false);
+    g_ipFix   = prefs.getBool("ipFix", false);
+    g_ipAddr  = IPAddress(prefs.getUInt("ip", 0));
+    g_ipMask  = IPAddress(prefs.getUInt("mask", (uint32_t)IPAddress(255, 255, 255, 0)));
+    g_ipGw    = IPAddress(prefs.getUInt("gw", 0));
+    g_ipDns   = IPAddress(prefs.getUInt("dns", 0));
     prefs.end();
 }
 
@@ -949,8 +1586,8 @@ static void updateNotifyLed()
         return;
     }
 
-    // WiFi 未接続 → 0 ↔ 255 の 80ms 高速点滅（ホストモードは自分の WiFi なので対象外）
-    if (!g_hostActive && WiFi.status() != WL_CONNECTED) {
+    // WiFi 未接続（5 秒以上）→ 0 ↔ 255 の 80ms 高速点滅（ホストモードは自分の WiFi なので対象外）
+    if (!g_hostActive && g_wifiLostMs && g_wifiAlarmed) {
         nlWrite((now % 160 < 80) ? 255 : 0);
         return;
     }
@@ -1005,30 +1642,51 @@ void setup()
     uart.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
     loadPrefs();
+    readModeSwitch();
 
     // WiFi 切断を即座に検知してフラグを立てる（loop() 先頭で FIN 送信）
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
+        g_apJoinEvent = true;
+        g_apJoinMs = millis();
+    }, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+    // How long a device waited for its address (a slow "checking network
+    // requirements" on a PC shows here).
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+        g_ipLogIp = info.wifi_ap_staipassigned.ip.addr;
+        g_ipLogMs = millis() - g_apJoinMs;
+        g_ipLogEvent = true;
+    }, ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED);
+
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+        memcpy(g_apLeftMac, info.wifi_ap_stadisconnected.mac, 6);
+        g_apLeftEvent = true;
+    }, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
+
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+        g_wifiLostReason = info.wifi_sta_disconnected.reason;
         g_wifiLostEvent = true;
     }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
     wifiConnect();
 
-    const char *hdrs[] = {"Referer"};
-    webServer.collectHeaders(hdrs, 1);
-
     webServer.on("/",                    HTTP_GET,  handleRoot);
     webServer.on("/wifi",                HTTP_GET,  handleWifiGet);
     webServer.on("/wifi",                HTTP_POST, handleWifiPost);
     webServer.on("/voltage",             HTTP_GET,  handleVoltageGet);
+    webServer.on("/qr",                  HTTP_GET,  [] { webServer.send(200, "text/html", pageQr()); });   // no password
+    webServer.on("/login",               HTTP_GET,  [] { webServer.send(200, "text/html", pageLogin()); });
+    webServer.on("/login",               HTTP_POST, handleLoginPost);
+    webServer.on("/logout",              HTTP_GET,  handleLogout);
     webServer.on("/voltage",             HTTP_POST, handleVoltagePost);
     webServer.on("/lang",                HTTP_GET,  handleLangToggle);
     // Firmware update: from the internet (a router, or USB tethering) or a file.
-    fwUpdateRoutes(webServer,
+    fwUpdateRoutes(
         [] { return (!g_hostActive && !apModeActive && WiFi.status() == WL_CONNECTED) || tetherNetif() != nullptr; },
-        htmlHead, [] { return g_langJa; });
+        htmlHead, [] { return g_langJa; }, authed);
     webServer.on("/generate_204",        HTTP_GET,  handleRoot);
     webServer.on("/hotspot-detect.html", HTTP_GET,  handleRoot);
     webServer.on("/ncsi.txt",            HTTP_GET,  handleRoot);
+    webServer.on("/favicon.ico",         HTTP_GET,  [] { webServer.send(204, "text/plain", ""); });
     webServer.onNotFound(handleNotFound);
     webServer.begin();
     LOG.println("[web] HTTP server on port 80");
@@ -1049,12 +1707,37 @@ void loop()
     updateWifiBuzzer();
     if (apModeActive) dnsServer.processNextRequest();
     if (g_hostActive) dnsRelayPoll();
-    webServer.handleClient();
+    limitDevices();
+    if (g_ipLogEvent) {
+        g_ipLogEvent = false;
+        LOG.printf("[host] address " IPSTR " given %lu ms after joining\n", IP2STR((esp_ip4_addr_t *)&g_ipLogIp),
+                   (unsigned long)g_ipLogMs);
+    }
+    webServer.loop();
+    if (g_beepReq) { g_beepReq = false; beepShort(); }
+    if (g_reconnectAt && (int32_t)(millis() - g_reconnectAt) >= 0) { g_reconnectAt = 0; wifiConnect(); }
+    g_mspPeer = (tcpClient && tcpClient.connected()) ? (uint32_t)tcpClient.remoteIP() : 0;
+    if (g_hostActive || WiFi.status() == WL_CONNECTED) lookUpLapTimer();
     updateLed();
     updateVoltage();
     updateNotifyLed();
 
-    // TCP セッション切断検知
+    // Host mode: FPV C5 Lap Timer left our WiFi → its session is over now
+    // (the address its lease had is the one its TCP came from).
+    if (g_apLeftEvent) {
+        g_apLeftEvent = false;
+        if (g_hostActive && g_tcpSessionActive && tcpClient && tcpClient.connected()) {
+            esp_netif_pair_mac_ip_t pair = {};
+            memcpy(pair.mac, g_apLeftMac, 6);
+            if (esp_netif_dhcps_get_clients_by_mac(WiFi.AP.netif(), 1, &pair) == ESP_OK &&
+                pair.ip.addr && pair.ip.addr == (uint32_t)tcpClient.remoteIP()) {
+                LOG.println("[tcp] FPV C5 Lap Timer left the WiFi");
+                tcpClient.stop();   // → "session lost" below: buzzer and LED
+            }
+        }
+    }
+
+    // TCP セッション切断検知（FPV C5 Lap Timer との接続が切れた）→ 長音 5 回、LED 中速点滅（再接続まで）
     if (g_tcpSessionActive && (!tcpClient || !tcpClient.connected())) {
         g_tcpSessionActive = false;
         tcpClient.stop();   // TCP リソース解放 → サーバーが即座に新規接続を受け付けられるように
@@ -1080,6 +1763,8 @@ void loop()
             g_tcpSessionActive = true;
             g_tcpEverConnected = true;
             LOG.println("[tcp] session started");
+            g_peerIsLap = (uint32_t)c.remoteIP() == g_lapIp;   // until it shows itself
+            learnLapMac();
             beepShort();
         }
     }

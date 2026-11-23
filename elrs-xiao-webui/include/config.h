@@ -1,7 +1,7 @@
 #pragma once
 
 // WiFi (use NVS values if saved; these are compile-time defaults)
-#define WIFI_SSID        "ELRS-Netpack-Setup"
+#define WIFI_SSID        "ELRS-NETpack-Setup"
 #define WIFI_PASSWORD    "elrs-netpack"
 
 #define TCP_PORT         8080
@@ -24,7 +24,7 @@
 #define VBAT_DEFAULT_ALARM_V  3.5f    // 1S LiPo low-voltage warning threshold
 
 // AP mode (captive portal)
-#define ap_ssid          "ELRS-Netpack-Setup"
+#define ap_ssid          "ELRS-NETpack-Setup"
 #define ap_password      "elrs-netpack"
 
 // Built-in LED (XIAO ESP32-S3: GPIO21, active-LOW)
@@ -42,7 +42,21 @@
 
 // Host mode: the netpack's own WiFi (the timer and the phones join it).
 // Channels 6-11 only, as the timer (the ESP-NOW bridge stays on ch 1).
-#define HOST_SSID_DEFAULT  "ELRS-Netpack"
+#define HOST_SSID_DEFAULT  "ELRS-NETpack"
 #define HOST_PASS_DEFAULT  "elrs-netpack"
 #define HOST_CH_DEFAULT    6
 #define HOST_MAX_STA       10
+
+// Host mode, devices besides FPV C5 Lap Timer (phones, PCs): limited as a
+// bridge (default 5, as FPV C5 Lap Timer's own host mode). One more place
+// is kept for FPV C5 Lap Timer at all times.
+#define HOST_PHONES_DEFAULT 5
+#define HOST_PHONES_MAX     (HOST_MAX_STA - 1)
+
+// Mode switch (optional, ticked on the WiFi page): D4 / GPIO5 to GND,
+// internal pull-up, read once at boot. Connected (ON) = host mode.
+#define MODE_SW_PIN      5    // D4
+
+// The admin password: every page but the QR page asks for it (a login,
+// kept 12 h). Public default: change it on the WiFi page.
+#define ADMIN_PASS_DEFAULT "admin"
