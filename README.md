@@ -147,7 +147,7 @@ The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21
 
 ---
 
-### Ways to write the firmware (from v2.13)
+### Ways to write the firmware (from v2.2.0)
 
 | Way | For | How |
 |---|---|---|
@@ -208,9 +208,9 @@ If flashing fails, enter bootloader mode:
 | Buzzer | Double-beep on WiFi connect; short beep on settings save |
 | Notification LED | 7-color auto-cycling LED with PWM brightness control |
 | Fast reconnect | Non-blocking auto-reconnect; retries every 10 s, falls back to captive portal after 60 s |
-| Host mode (v2.13) | The netpack runs its own WiFi; the timer and phones join it (below) |
-| USB tethering (v2.13) | In host mode, an Android phone on the USB port takes the WiFi to the internet (on / off in the settings) |
-| Update page (v2.13) | Write a firmware.bin from the browser (`/update`) |
+| Host mode (v2.2.0) | The netpack runs its own WiFi; the timer and phones join it (below) |
+| USB tethering (v2.2.0) | In host mode, an Android phone on the USB port takes the WiFi to the internet (on / off in the settings) |
+| Update page (v2.2.0) | Write a firmware.bin from the browser (`/update`) |
 | Max TX power | 21 dBm (both WiFi and ESP-NOW sides) |
 | Backpack version | Reports firmware version 10.1 to RotorHazard |
 
@@ -232,7 +232,7 @@ Connectionless, like UDP: the bridge takes the pilot's bind-phrase UID as its ow
 
 ---
 
-### Host mode and USB tethering (v2.13)
+### Host mode and USB tethering (v2.2.0)
 
 A setup built around the netpack. Its XIAO runs a WiFi of its own (host mode), and the timer and the phones join it. The timer's MSP goes on as before: UART → ESP-NOW bridge → the goggles' backpack (the bridge is a separate board; its ESP-NOW stays on channel 1).
 
@@ -281,7 +281,7 @@ With an Android phone on the XIAO's USB-C and its "USB tethering" on, the device
 - USB tethering: on / off (host mode only)
 - Changing the connection, the host's WiFi or tethering restarts the netpack after saving
 
-**`/update` — Firmware update** (v2.13)
+**`/update` — Firmware update** (v2.2.0)
 - The firmware's version (release and build)
 - Online: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update) when there is a newer release; it is written and the netpack restarts
 - A file: pick the firmware.bin of `elrs-xiao-webui`; it is written and the netpack restarts. Settings are kept
