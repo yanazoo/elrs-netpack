@@ -151,6 +151,20 @@ pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload
 
 ---
 
+### 書き込み方法（v2.13 から）
+
+| 方法 | 対象 | 使い方 |
+|---|---|---|
+| **Web 書き込みページ**（最新版） | netpack XIAO・ESP-NOW ブリッジ（C3 / Wrover-E） | PC の Chrome / Edge で [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) を開き、機器の「書き込む」 |
+| **Web 書き込みページ**（ファイルを指定） | 同上 | 同じページの「ファイルを指定して書き込む」に .bin（試験版・前の版）またはリリースの zip をドロップ。アドレスはファイル名から自動で入ります（変更可）。firmware.bin には「最初のアプリから起動」（otadata）が自動で付きます |
+| **ネットから更新**（ボタン） | netpack XIAO | netpack の設定ページ →「更新」→「🔍 最新版を確認」→「⬇️ 〜に更新」。インターネットが必要です（クライアントモードのルーター、またはホストモードの USB テザリング） |
+| **ファイルから** | netpack XIAO | netpack の設定ページ →「更新」→ firmware.bin（`elrs-netpack-xiao_esp32s3-firmware.bin` かリリース zip の中）を選んで「ファイルで更新」 |
+| **PlatformIO**（GitHub のソースから） | すべて | 下記 |
+
+- リリースには、zip（bootloader・partitions・firmware）、1 つにまとめた `*-full.bin`（アドレス `0x0` に書き込む。esptool-js などで）、ネット更新用の `elrs-netpack-xiao_esp32s3-firmware.bin` と `elrs-netpack-version.txt` が付きます。
+- 設定（WiFi など）は、どの方法でも残ります（「消去」にチェックを入れたときを除く）。
+- Web 書き込みページは、リリースのたびに GitHub Actions が作って GitHub Pages に置きます（リポジトリの Settings → Pages → Source を **GitHub Actions** にしておく必要があります）。
+
 ### XIAO ESP32-S3 への書き込み（`elrs-xiao-webui/`）
 
 1. VS Code でフォルダを開く：
@@ -272,7 +286,9 @@ netpack の XIAO の USB-C に Android スマホをつなぎ、スマホの「US
 - 接続方式・ホストの WiFi・テザリングを変えると、保存後に再起動します
 
 **`/update` — ファーム更新**（v2.13）
-- `elrs-xiao-webui` の firmware.bin を選んで書き込み、再起動します。設定は残ります
+- 今のファームの版（リリース名とビルド）
+- ネットから更新：「🔍 最新版を確認」→ 新しい版があれば「⬇️ 〜に更新」で書き込み、再起動します
+- ファイルから：`elrs-xiao-webui` の firmware.bin を選んで書き込み、再起動します。設定は残ります
 
 **`/voltage` — 電圧モニター**
 - 現在の LiPo 電圧を表示

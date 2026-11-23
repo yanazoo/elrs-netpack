@@ -147,6 +147,20 @@ The boot log (USB serial) reads `[boot] ESP-NOW bridge (UART RX=GPIO20 TX=GPIO21
 
 ---
 
+### Ways to write the firmware (from v2.13)
+
+| Way | For | How |
+|---|---|---|
+| **Web flasher** (latest) | netpack XIAO, ESP-NOW bridge (C3 / Wrover-E) | Open [https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/) in Chrome / Edge on a PC and press the device's "書き込む" |
+| **Web flasher** (your own files) | same | Drop .bin files (a test build, an older release) or a release zip on "ファイルを指定して書き込む". Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot |
+| **Online** (a button) | netpack XIAO | netpack settings → "更新" (Update) → "🔍 最新版を確認" → "⬇️ … に更新". Needs the internet (a router in client mode, or USB tethering in host mode) |
+| **A file** | netpack XIAO | netpack settings → "更新" → pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin` or the one in the release zip) |
+| **PlatformIO** (from the source on GitHub) | all | below |
+
+- A release carries the zips (bootloader, partitions, firmware), one-file `*-full.bin` images (written at `0x0`, for esptool-js and others), and `elrs-netpack-xiao_esp32s3-firmware.bin` and `elrs-netpack-version.txt` for the online update.
+- Settings (WiFi and so on) are kept every way (unless you tick erase).
+- GitHub Actions builds the web flasher at each release and puts it on GitHub Pages (Settings → Pages → Source must be **GitHub Actions**).
+
 ### Flash XIAO ESP32-S3 (`elrs-xiao-webui/`)
 
 1. Open the folder in VS Code:
@@ -268,7 +282,9 @@ With an Android phone on the XIAO's USB-C and its "USB tethering" on, the device
 - Changing the connection, the host's WiFi or tethering restarts the netpack after saving
 
 **`/update` — Firmware update** (v2.13)
-- Pick the firmware.bin of `elrs-xiao-webui`; it is written and the netpack restarts. Settings are kept
+- The firmware's version (release and build)
+- Online: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update) when there is a newer release; it is written and the netpack restarts
+- A file: pick the firmware.bin of `elrs-xiao-webui`; it is written and the netpack restarts. Settings are kept
 
 **`/voltage` — Voltage Monitor**
 - Displays current LiPo voltage

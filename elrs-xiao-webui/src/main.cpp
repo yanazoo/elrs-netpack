@@ -10,6 +10,7 @@
 #include <Update.h>
 #include "esp_netif.h"
 #include "usb_tether.h"
+#include "fw_update.h"
 #include "log.h"
 #include "config.h"
 #include "led.h"
@@ -375,6 +376,7 @@ static String statusCard()
             p += "<br>";
         }
     }
+    p += L("Firmware ", "ファーム "); p += fwVersion(); p += "（"; p += fwBuild(); p += "）— <a href='/update'>"; p += L("update", "更新"); p += "</a>";
     p += "</div>";
     return p;
 }
@@ -842,55 +844,6 @@ static void handleWifiPost()
     wifiConnect();
 }
 
-// ── Firmware update (a .bin from the browser) ─────────────────────────────────
-// With USB tethering on, the USB port is not there for uploading.
-
-static String pageUpdate(const String &msg = "")
-{
-    String p = htmlHead(L("Update", "ファーム更新"));
-    p += "<h2>"; p += L("Firmware update", "ファーム更新"); p += "</h2>";
-    if (msg.length()) { p += "<div class='msg'>"; p += msg; p += "</div>"; }
-    p += "<form method='POST' action='/update' enctype='multipart/form-data'>";
-    p += "<label>"; p += L("firmware.bin of elrs-xiao-webui", "elrs-xiao-webui の firmware.bin");
-    p += "<input type='file' name='fw' accept='.bin'></label>";
-    p += "<button type='submit'>"; p += L("Update", "更新する"); p += "</button>";
-    p += "</form><div class='note'>";
-    p += L("It restarts when done (about 30 s). Settings are kept.", "書き込みが終わると再起動します（約 30 秒）。設定はそのまま残ります。");
-    p += "</div></body></html>";
-    return p;
-}
-
-static void handleUpdateGet() { webServer.send(200, "text/html", pageUpdate()); }
-
-static bool g_updOk = false;
-static void handleUpdateUpload()
-{
-    HTTPUpload &u = webServer.upload();
-    if (u.status == UPLOAD_FILE_START) {
-        LOG.printf("[update] %s\n", u.filename.c_str());
-        g_updOk = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
-    } else if (u.status == UPLOAD_FILE_WRITE) {
-        if (g_updOk && Update.write(u.buf, u.currentSize) != u.currentSize) g_updOk = false;
-    } else if (u.status == UPLOAD_FILE_END) {
-        g_updOk = g_updOk && Update.end(true);
-        LOG.printf("[update] %s (%u bytes)\n", g_updOk ? "ok" : Update.errorString(), (unsigned)u.totalSize);
-    } else if (u.status == UPLOAD_FILE_ABORTED) {
-        Update.abort();
-        g_updOk = false;
-    }
-}
-
-static void handleUpdatePost()
-{
-    if (!g_updOk) {
-        webServer.send(200, "text/html", pageUpdate(String(L("Update failed: ", "更新できませんでした：")) + Update.errorString()));
-        return;
-    }
-    webServer.send(200, "text/html", pageUpdate(L("Done. Restarting…", "書き込みました。再起動します…")));
-    delay(800);
-    ESP.restart();
-}
-
 static void handleVoltagePost()
 {
     String ratioStr = webServer.arg("ratio");
@@ -1032,7 +985,7 @@ static void updateNotifyLed()
 void setup()
 {
     Serial.begin(115200);
-    LOG.println("[boot] XIAO ESP32-S3 WiFi bridge + Web UI");
+    LOG.printf("[boot] XIAO ESP32-S3 WiFi bridge + Web UI  %s (%s)\n", fwVersion(), fwBuild());
 
     analogReadResolution(12);
 
@@ -1069,8 +1022,10 @@ void setup()
     webServer.on("/voltage",             HTTP_GET,  handleVoltageGet);
     webServer.on("/voltage",             HTTP_POST, handleVoltagePost);
     webServer.on("/lang",                HTTP_GET,  handleLangToggle);
-    webServer.on("/update",              HTTP_GET,  handleUpdateGet);
-    webServer.on("/update",              HTTP_POST, handleUpdatePost, handleUpdateUpload);
+    // Firmware update: from the internet (a router, or USB tethering) or a file.
+    fwUpdateRoutes(webServer,
+        [] { return (!g_hostActive && !apModeActive && WiFi.status() == WL_CONNECTED) || tetherNetif() != nullptr; },
+        htmlHead, [] { return g_langJa; });
     webServer.on("/generate_204",        HTTP_GET,  handleRoot);
     webServer.on("/hotspot-detect.html", HTTP_GET,  handleRoot);
     webServer.on("/ncsi.txt",            HTTP_GET,  handleRoot);
