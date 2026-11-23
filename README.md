@@ -275,7 +275,8 @@ Settings → ELRS Backpack General
 | mDNS | `elrs-netpack.local` (web and TCP) |
 | Firmware update | Online (GitHub release) or from a file |
 | Voltage monitor and alarm | Shows the LiPo voltage; buzzer and LED below the threshold |
-| Buzzer / LED notices | 2 beeps on WiFi joined, 1 on settings saved, long beeps when TCP drops |
+| Buzzer / LED notices | 2 beeps on WiFi joined, 1 on settings saved, 1 when FPV C5 Lap Timer (MSP) connects |
+| Lost-connection notice | **When the TCP (MSP) connection to FPV C5 Lap Timer drops: 5 long beeps and the LED blinking at medium speed** (until it reconnects). In host mode it is noticed as soon as FPV C5 Lap Timer leaves the netpack's WiFi, otherwise in about 11 s (TCP keepalive). The netpack's own WiFi dropping has its own notice (buzzer for 5 s, fast LED blink) |
 | Max TX power | 21 dBm on WiFi and ESP-NOW |
 | Backpack version | Reports version 10.1 to the connecting host |
 
@@ -321,7 +322,7 @@ It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID
 |---|---|
 | Setup WiFi (waiting for settings) | Slow blink, 500 ms |
 | WiFi lost (client mode) | Fast blink, 80 ms (until reconnected) |
-| TCP dropped (after it was up) | Medium blink, 300 ms |
+| The connection to FPV C5 Lap Timer (MSP) dropped (after it was up) | Medium blink, 300 ms (until it reconnects) |
 | Voltage alarm | On |
 | Normal (client joined, or host mode) | Heartbeat, 2 pulses / 2 s (peak ~4%) |
 | LED disabled | Off |

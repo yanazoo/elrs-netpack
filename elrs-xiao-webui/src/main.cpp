@@ -40,6 +40,10 @@ static uint32_t g_apRetryMs         = 0;
 static const uint32_t AP_RETRY_INTERVAL_MS = 15000;
 static uint32_t g_wifiLostMs        = 0;
 static volatile bool g_wifiLostEvent = false; // WiFi 切断イベントフラグ（イベントタスク → loop）
+// Host mode: a device left our WiFi (event task → loop). If it was FPV C5
+// Lap Timer, its TCP session ends at once (keepalive alone takes ~11 s).
+static volatile bool g_apLeftEvent = false;
+static uint8_t       g_apLeftMac[6];
 
 static bool     g_tcpSessionActive  = false;  // 現在 TCP セッション中か
 static bool     g_tcpEverConnected  = false;  // 一度でも TCP 接続したか
@@ -1165,6 +1169,11 @@ void setup()
     loadPrefs();
 
     // WiFi 切断を即座に検知してフラグを立てる（loop() 先頭で FIN 送信）
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+        memcpy(g_apLeftMac, info.wifi_ap_stadisconnected.mac, 6);
+        g_apLeftEvent = true;
+    }, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
+
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
         g_wifiLostEvent = true;
     }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
@@ -1212,7 +1221,22 @@ void loop()
     updateVoltage();
     updateNotifyLed();
 
-    // TCP セッション切断検知
+    // Host mode: FPV C5 Lap Timer left our WiFi → its session is over now
+    // (the address its lease had is the one its TCP came from).
+    if (g_apLeftEvent) {
+        g_apLeftEvent = false;
+        if (g_hostActive && g_tcpSessionActive && tcpClient && tcpClient.connected()) {
+            esp_netif_pair_mac_ip_t pair = {};
+            memcpy(pair.mac, g_apLeftMac, 6);
+            if (esp_netif_dhcps_get_clients_by_mac(WiFi.AP.netif(), 1, &pair) == ESP_OK &&
+                pair.ip.addr && pair.ip.addr == (uint32_t)tcpClient.remoteIP()) {
+                LOG.println("[tcp] FPV C5 Lap Timer left the WiFi");
+                tcpClient.stop();   // → "session lost" below: buzzer and LED
+            }
+        }
+    }
+
+    // TCP セッション切断検知（FPV C5 Lap Timer との接続が切れた）→ 長音 5 回、LED 中速点滅（再接続まで）
     if (g_tcpSessionActive && (!tcpClient || !tcpClient.connected())) {
         g_tcpSessionActive = false;
         tcpClient.stop();   // TCP リソース解放 → サーバーが即座に新規接続を受け付けられるように
