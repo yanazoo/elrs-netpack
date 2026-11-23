@@ -268,7 +268,7 @@ static String htmlHead(const char *title)
 {
     String h = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
     h += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
-    h += "<title>ELRS NETpack — "; h += title; h += "</title>";
+    h += "<title>ELRS-NETpack — "; h += title; h += "</title>";
     h += "<style>"
          "*{box-sizing:border-box}"
          "body{background:#181818;color:#d4d4d4;font-family:sans-serif;"
@@ -316,7 +316,7 @@ static String htmlHead(const char *title)
          ".nets input[type=radio]{accent-color:#5b9bd5}"
          ".ipgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}"
          "</style></head><body>";
-    h += "<div class='topbar'><h1>ELRS NETpack</h1>";
+    h += "<div class='topbar'><h1>ELRS-NETpack</h1>";
     h += "<span class='rssi'>"; h += rssiBar(); h += "</span></div>";
     h += "<nav>";
     h += "<a href='/wifi'>WiFi</a>";
