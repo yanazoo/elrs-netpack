@@ -309,7 +309,7 @@ It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID
 
 ## Web UI pages
 
-**Admin password** (v2.3.0): every page but QR (WiFi, voltage, update) opens **after a login**. The default password is **`admin`** (public): **change it** under "管理者パスワード" on the WiFi page (the page warns while it is the default). A login lasts 12 h (or until the netpack restarts); "ログアウト" on the WiFi page ends it.
+**Admin password** (v2.3.0): every page but QR (WiFi, voltage, update) opens **after a login**. The default password is **`admin`** (public): **change it** under "管理者パスワード" on the WiFi page (the page warns while it is the default). A login lasts **the time set on the WiFi page** (5 or 30 min, 1, 6 or 12 h; default 12 h) or until the netpack restarts; while logged in, a "**ログアウト**" (log out) button sits at the right of the menu.
 
 **`/wifi` — WiFi**: see [above](#wifi-settings-wifi).
 
@@ -378,6 +378,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 | `lapMac` | Bytes | — | FPV C5 Lap Timer's MAC (learned from its OSD connection; never sent off by the limit) |
 | `tether` | Bool | false | USB tethering (host mode only) |
 | `admPass` | String | `admin` | Admin password (every page but QR; change it) |
+| `loginMin` | UShort | 720 | How long a login lasts (minutes: 5, 30, 60, 360, 720) |
 | `vbatRatio` | Float | 2.0 | Voltage divider ratio |
 | `alarmV` | Float | 3.5 | Alarm threshold (V) |
 | `vbatAlarmEn` | Bool | false | Voltage alarm on |

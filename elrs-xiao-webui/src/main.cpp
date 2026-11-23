@@ -81,8 +81,11 @@ static bool     g_hostActive = false;   // host mode running
 static String   g_hostSsid   = HOST_SSID_DEFAULT;
 static String   g_hostPass   = HOST_PASS_DEFAULT;
 static String   g_admPass    = ADMIN_PASS_DEFAULT;  // every page but QR asks for it
-static String   g_tokens[4];                         // logged-in browsers (until restart)
+static struct { String t; uint32_t at; } g_tokens[4];   // logged-in browsers (until restart)
 static uint8_t  g_tokNext    = 0;
+static uint16_t g_loginMin   = 720;                  // a login lasts (minutes): 5, 30, 60, 360, 720
+static const uint16_t LOGIN_CHOICES[] = {5, 30, 60, 360, 720};
+static bool authed();
 static uint8_t  g_hostCh     = HOST_CH_DEFAULT;
 static uint8_t  g_hostPhones = HOST_PHONES_DEFAULT;   // phones / PCs besides FPV C5 Lap Timer
 static uint8_t  g_lapMac[6];                          // FPV C5 Lap Timer's (learned from its TCP)
@@ -332,7 +335,8 @@ static String htmlHead(const char *title)
     h += "<a href='/voltage'>"; h += L("Voltage", "電圧"); h += "</a>";
     h += "<a href='/qr'>QR</a>";
     h += "<a href='/update'>"; h += L("Update", "更新"); h += "</a>";
-    h += "<a class='lang' href='/lang'>"; h += (g_langJa ? "EN" : "JA"); h += "</a>";
+    if (authed()) { h += "<a class='lang' href='/logout' style='margin-left:auto'>"; h += L("Log out", "ログアウト"); h += "</a>"; }
+    h += "<a class='lang' href='/lang'"; if (authed()) h += " style='margin-left:0'"; h += ">"; h += (g_langJa ? "EN" : "JA"); h += "</a>";
     h += "</nav><hr>";
     return h;
 }
@@ -596,9 +600,17 @@ static String pageWifi(const String &msg = "")
     p += "<h2>"; p += L("Admin password", "管理者パスワード"); p += "</h2>";
     p += "<label>"; p += L("Password (blank keeps it)", "パスワード（変えないときは空欄）");
     p += "<input type='password' name='admpass' maxlength='32' autocomplete='new-password'></label>";
+    p += "<label>"; p += L("A login lasts", "ログインの有効時間"); p += "<select name='loginmin'>";
+    for (uint16_t m : LOGIN_CHOICES) {
+        p += "<option value='"; p += String(m); p += "'"; if (m == g_loginMin) p += " selected"; p += ">";
+        if (m < 60) { p += String(m); p += L(" min", " 分"); }
+        else { p += String(m / 60); p += L(m == 60 ? " hour" : " hours", " 時間"); }
+        if (m == 720) p += L(" (default)", "（初期値）");
+        p += "</option>";
+    }
+    p += "</select></label>";
     p += "<div class='note'>";
-    p += L("Asked for every page but QR. <a href='/logout'>Log out</a>",
-           "QR 以外のページを開くときに聞きます。<a href='/logout'>ログアウト</a>");
+    p += L("Asked for every page but QR.", "QR 以外のページを開くときに聞きます。");
     if (g_admPass == ADMIN_PASS_DEFAULT)
         p += L("<br><b style='color:#e0a050'>Still the default (admin): change it.</b>",
                "<br><b style='color:#e0a050'>初期値（admin）のままです。変更してください。</b>");
@@ -664,8 +676,13 @@ static bool authed()
     if (i < 0) return false;
     String t = c.substring(i + 3, i + 3 + 16);
     if (t.length() != 16) return false;
+    uint32_t now = millis();
     for (auto &k : g_tokens)
-        if (k.length() && k == t) return true;
+        if (k.t.length() && k.t == t) {
+            if (now - k.at < (uint32_t)g_loginMin * 60000UL) return true;
+            k.t = "";   // expired
+            return false;
+        }
     return false;
 }
 
@@ -711,9 +728,10 @@ static void handleLoginPost()
     }
     char t[17];
     snprintf(t, sizeof t, "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
-    g_tokens[g_tokNext] = t;
+    g_tokens[g_tokNext].t = t;
+    g_tokens[g_tokNext].at = millis();
     g_tokNext = (g_tokNext + 1) % 4;
-    webServer.sendHeader("Set-Cookie", String("np=") + t + "; Path=/; Max-Age=43200; HttpOnly");
+    webServer.sendHeader("Set-Cookie", String("np=") + t + "; Path=/; Max-Age=" + String((uint32_t)g_loginMin * 60) + "; HttpOnly");
     webServer.sendHeader("Location", next, true);
     webServer.send(302, "text/plain", "");
 }
@@ -724,7 +742,7 @@ static void handleLogout()
     int i = c.indexOf("np=");
     if (i >= 0)
         for (auto &k : g_tokens)
-            if (k.length() && k == c.substring(i + 3, i + 19)) k = "";
+            if (k.t.length() && k.t == c.substring(i + 3, i + 19)) k.t = "";
     webServer.sendHeader("Set-Cookie", "np=; Path=/; Max-Age=0");
     webServer.sendHeader("Location", "/qr", true);
     webServer.send(302, "text/plain", "");
@@ -1326,6 +1344,11 @@ static void handleWifiPost()
     prefs.putBool("configured", anyNet());
     prefs.putUChar("netMode", mode);
     prefs.putUChar("swMode", sw);
+    {
+        uint16_t lm = webServer.arg("loginmin").toInt();
+        for (uint16_t m : LOGIN_CHOICES)
+            if (m == lm) { g_loginMin = lm; prefs.putUShort("loginMin", lm); }
+    }
     String adp = webServer.arg("admpass");
     if (adp.length()) { prefs.putString("admPass", adp); g_admPass = adp; }
     prefs.putString("hSsid", hssid.length() ? hssid : g_hostSsid);
@@ -1444,7 +1467,13 @@ static void loadPrefs()
     g_swMode           = prefs.getUChar("swMode",     0);
     g_swMode = g_swMode ? 1 : 0;
     g_admPass          = prefs.getString("admPass",   ADMIN_PASS_DEFAULT);
-    if (!g_admPass.length()) g_admPass = ADMIN_PASS_DEFAULT;   // (test builds had 1 / 2 for A / B contacts: both "used")
+    if (!g_admPass.length()) g_admPass = ADMIN_PASS_DEFAULT;
+    g_loginMin = 720;
+    {
+        uint16_t lm = prefs.getUShort("loginMin", 720);
+        for (uint16_t m : LOGIN_CHOICES)
+            if (m == lm) g_loginMin = lm;
+    }   // (test builds had 1 / 2 for A / B contacts: both "used")
     g_hostSsid         = prefs.getString("hSsid",     HOST_SSID_DEFAULT);
     g_hostPass         = prefs.getString("hPass",     HOST_PASS_DEFAULT);
     g_hostCh           = prefs.getUChar("hCh",        HOST_CH_DEFAULT);
