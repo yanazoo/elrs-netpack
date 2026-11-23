@@ -550,10 +550,10 @@ static String pageWifi(const String &msg = "")
     }
     p += "</select></label>";
     p += "<div class='note'>";
-    p += L("A limit for use as a bridge: one place is always kept free for FPV C5 Lap Timer, and the phones / PCs are few (settings, a look at FPV C5 Lap Timer). "
-           "One more is sent off and kept out for 30 s. Raise it for a crowd watching on the netpack's WiFi.",
-           "ブリッジとして使うための制限です。FPV C5 Lap Timer の 1 台分はいつも空けておき、スマホ・PC は少なめ（設定や FPV C5 Lap Timer の画面を見る程度）にします。"
-           "上限を超えてつないだ機器は外し、30 秒間は入れません。netpack の WiFi で大勢が観戦するときは増やしてください。");
+    p += L("A limit for use as a bridge: one place is always kept free for FPV C5 Lap Timer, and the phones / PCs are limited to this number (default 5, as FPV C5 Lap Timer's own host mode). "
+           "One more is sent off and kept out for 30 s. 10 devices in all at most.",
+           "ブリッジとして使うための制限です。FPV C5 Lap Timer の 1 台分はいつも空けておき、スマホ・PC はこの台数までにします（初期値 5 台。FPV C5 Lap Timer のホストモードと同じ）。"
+           "上限を超えてつないだ機器は外し、30 秒間は入れません。WiFi 全体で最大 10 台です。");
     p += "</div>";
     p += "<div class='note'>";
     p += L("FPV C5 Lap Timer joins this WiFi in client mode (its netpack address: auto). Phones open it from its link at the top. ",

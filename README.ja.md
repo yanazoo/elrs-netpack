@@ -183,8 +183,8 @@ netpack の XIAO（初回起動・WiFi 未設定時）：
 - どの接続先にもつながらないときは、設定用の WiFi（`ELRS-NETpack-Setup`）を出し、15 秒ごとにつなぎ直します。つながっていた WiFi が切れたときは 10 秒ごとに再接続し、60 秒戻らなければ設定用の WiFi を出します。
 - v2.2.x までの接続先は、1 件目にそのまま引き継がれます。
 
-**ホストモード**：SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）・**スマホ・PC の接続台数**（1〜9 台、初期値 2 台）（v2.3.0）。
-- ブリッジとして使うための制限です。**FPV C5 Lap Timer の 1 台分はいつも空けておき**、スマホ・PC は設定した台数までにします（設定や FPV C5 Lap Timer の画面を見る程度を想定して、初期値は 2 台）。
+**ホストモード**：SSID・パスワード（8〜63 文字）・チャンネル（6〜11 ch）・**スマホ・PC の接続台数**（1〜9 台、初期値 5 台）（v2.3.0）。
+- ブリッジとして使うための制限です。**FPV C5 Lap Timer の 1 台分はいつも空けておき**、スマホ・PC は設定した台数までにします（初期値は 5 台。FPV C5 Lap Timer のホストモードの初期値と同じ）。
 - 上限を超えてつないだ機器は外し、30 秒間は入れません。FPV C5 Lap Timer は、OSD の接続（TCP）をしてきた機器として覚えておきます（一度つながったあとは、いつでも入れます）。
 - netpack の WiFi で大勢が観戦するときは、台数を増やしてください（WiFi 全体で最大 10 台）。
 
@@ -204,7 +204,7 @@ netpack の XIAO（初回起動・WiFi 未設定時）：
 2. 設定ページは `http://192.168.4.1/`（または `http://elrs-netpack.local/`）です。
 3. FPV C5 Lap Timer は **クライアントモード** で、接続先にこの SSID とパスワードを登録します。netpack アドレスは `auto` のままで、FPV C5 Lap Timer が `elrs-netpack.local` で netpack を見つけます。
 4. スマホもこの WiFi に接続し、netpack の設定ページのいちばん上の「**FPV C5 Lap Timer**」のリンクから、その画面を開けます（MSP の接続元、または同じ WiFi の `fpv-c5-lt.local` を自動で探します）。
-5. スマホ・PC は **設定した台数まで**（初期値 2 台）です。FPV C5 Lap Timer の 1 台分は別にいつも空いています。設定ページに、つながっている機器のアドレスと電波の強さが出ます。
+5. スマホ・PC は **設定した台数まで**（初期値 5 台）です。FPV C5 Lap Timer の 1 台分は別にいつも空いています。設定ページに、つながっている機器のアドレスと電波の強さが出ます。
 6. クライアントモードに戻すときは、設定ページで「クライアント」を選んで保存します。
 
 **USB テザリング**（ホストモードのときだけ）
@@ -273,7 +273,7 @@ Settings → ELRS バックパック 一般設定
 | TCP MSP ブリッジ | TCP 8080 ⇄ UART。新しい接続が来たら古い接続と入れ替え（FPV C5 Lap Timer の再起動・つなぎ直し） |
 | Web 設定画面 | WiFi・電圧・更新の各ページ。日本語 / 英語の切り替え |
 | WiFi（クライアント） | 接続先 5 件（選択 / 自動）、IP 固定、つながらないときは設定用の WiFi（キャプティブポータル） |
-| WiFi（ホスト） | netpack の WiFi（SSID・パスワード・ch 6〜11）、FPV C5 Lap Timer ＋ スマホ・PC（1〜9 台、初期値 2 台）、DNS の中継 |
+| WiFi（ホスト） | netpack の WiFi（SSID・パスワード・ch 6〜11）、FPV C5 Lap Timer ＋ スマホ・PC（1〜9 台、初期値 5 台）、DNS の中継 |
 | USB テザリング | ホストモードで Android スマホからインターネットへ（RNDIS / NCM / ECM、NAPT） |
 | mDNS | `elrs-netpack.local`（Web と TCP の両方） |
 | ファーム更新 | ネットから（GitHub のリリース）／ファイルから |
@@ -358,7 +358,7 @@ UDP のような**コネクションレス送信**です。ブリッジはパイ
 | `hSsid` | String | `ELRS-NETpack` | ホストモードの SSID |
 | `hPass` | String | `elrs-netpack` | ホストモードのパスワード |
 | `hCh` | UChar | 6 | ホストモードのチャンネル（6〜11） |
-| `hMax` | UChar | 2 | ホストモードのスマホ・PC の接続台数（1〜9、FPV C5 Lap Timer とは別） |
+| `hMax` | UChar | 5 | ホストモードのスマホ・PC の接続台数（1〜9、FPV C5 Lap Timer とは別） |
 | `lapMac` | Bytes | — | FPV C5 Lap Timer の MAC アドレス（OSD の接続から覚える。台数の制限で外さない） |
 | `tether` | Bool | false | USB テザリング（ホストモードのみ） |
 | `vbatRatio` | Float | 2.0 | 電圧分圧比 |
