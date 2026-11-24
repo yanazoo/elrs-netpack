@@ -646,17 +646,6 @@ static String pageWifi(const String &msg = "")
                "<br><b style='color:#e0a050'>初期値（admin）のままです。変更してください。</b>");
     p += "</div>";
     p += "<button type='submit'>"; p += L("Save", "保存"); p += "</button>";
-    p += "</form>";
-    // Calibration: the voltage measured with a meter sets the divider ratio.
-    p += "<h2>"; p += L("Calibrate", "校正"); p += "</h2>";
-    p += "<div class='note'>";
-    p += L("Measure the battery with a meter and enter it: the divider ratio is worked out from it and saved (resistor and ADC tolerances make the reading a little off).",
-           "テスターでバッテリーの電圧を測って入れると、分圧比を計算して保存します（抵抗や ADC の誤差で、表示が少しずれることがあります）。");
-    p += "</div>";
-    p += "<form method='POST' action='/voltage/cal'>";
-    p += "<label>"; p += L("Measured voltage (V)", "実際の電圧（V）");
-    p += "<input type='number' name='actual' step='0.01' min='0.5' max='30' required></label>";
-    p += "<button type='submit'>"; p += L("Calibrate", "校正する"); p += "</button>";
     p += "</form></body></html>";
     return p;
 }
@@ -847,6 +836,17 @@ static String pageVoltage(const String &msg = "")
     if (g_ledEnabled) p += " checked";
     p += "><span>"; p += L("LED (notifications &amp; alarm)", "LED (通知・アラーム)"); p += "</span></div>";
     p += "<button type='submit'>"; p += L("Save", "保存"); p += "</button>";
+    p += "</form>";
+    // Calibration: the voltage measured with a meter sets the divider ratio.
+    p += "<h2>"; p += L("Calibrate", "校正"); p += "</h2>";
+    p += "<div class='note'>";
+    p += L("Measure the battery with a meter and enter it: the divider ratio is worked out from it and saved (resistor and ADC tolerances make the reading a little off).",
+           "テスターでバッテリーの電圧を測って入れると、分圧比を計算して保存します（抵抗や ADC の誤差で、表示が少しずれることがあります）。");
+    p += "</div>";
+    p += "<form method='POST' action='/voltage/cal'>";
+    p += "<label>"; p += L("Measured voltage (V)", "実際の電圧（V）");
+    p += "<input type='number' name='actual' step='0.01' min='0.5' max='30' required></label>";
+    p += "<button type='submit'>"; p += L("Calibrate", "校正する"); p += "</button>";
     p += "</form></body></html>";
     return p;
 }
