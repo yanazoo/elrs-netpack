@@ -382,6 +382,8 @@ With the netpack on a 1S LiPo, the buzzer and LED tell when the voltage gets low
 2. On the voltage page (`/voltage`), check the ratio `2.0` (100 kΩ + 100 kΩ) and the threshold (default 3.5 V), and switch the voltage alarm on.
 3. Below the threshold, the buzzer sounds on and the notification LED is lit.
 
+**Calibration** (v2.3.5): resistor and ADC tolerances can make the reading a little off (usually low). Measure the battery with a meter and enter it under "**校正**" (calibrate) on the voltage page: the divider ratio is worked out and saved.
+
 On 5V (a power bank or a BEC), leave the divider off and the alarm off (a power bank gives 5V until it is empty, so the voltage tells nothing).
 
 ---
@@ -440,6 +442,7 @@ It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID
 **`/voltage` — Voltage monitor**
 - Shows the current LiPo voltage
 - Divider ratio: `2.0` for equal resistors (100 kΩ + 100 kΩ)
+- Calibrate: enter the voltage measured with a meter; the divider ratio is worked out and saved (v2.3.5)
 - Alarm threshold: default 3.5 V (1S LiPo low voltage)
 - Voltage alarm, buzzer and notification LED on / off each
 
