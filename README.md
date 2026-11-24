@@ -87,6 +87,31 @@ TX と RX は**交差**させます。
 
 > 3V3 / 5V はボード間で直接つながないでください（つなぐのは GND だけ）。各ボードを USB などで給電するか、同じ電源から各ボードの 5V / GND へ配線します。
 
+### FPV C5 Lap Timer を netpack にする（タイマー流用版）
+
+ブリッジを付けずに組んだ FPV C5 Lap Timer（XIAO ESP32-S3 ＋ XIAO ESP32-C5）は、**配線を変えずに** netpack にできます。C5 が ELRSバックパック-ブリッジになり、S3 が netpack になります。機能は通常の netpack と同じです。
+
+| 機器 | 書き込むもの（Web 書き込みページ） |
+|---|---|
+| S3 | ELRS-NETpack の配線「**タイマー流用**」 |
+| C5 | ELRSバックパック-ブリッジのハード「**XIAO ESP32-C5（タイマー流用）**」 |
+
+配線はタイマーのままです（UART は S3 D3/D4 ⇔ C5 D4/D5、電源は 5V を両方に、GND 共通）。
+
+| タイマー流用版の S3 | 使い道 | 通常の netpack では |
+|---|---|---|
+| D3 / GPIO4（TX）→ C5 D4 / GPIO23（RX） | ブリッジへ | D0 / GPIO1 |
+| D4 / GPIO5（RX）← C5 D5 / GPIO24（TX） | ブリッジから | D1 / GPIO2 |
+| D5 / GPIO6 | ブザー＋（− は GND）※任意 | D3 / GPIO4（＋）・D5 / GPIO6（−） |
+| D1 / GPIO2 | モード切り替えスイッチ（GND へ）※任意 | D4 / GPIO5 |
+| D0 / GPIO1 | 通知 LED ※任意 | GPIO9 |
+| D2 / GPIO3 | LiPo 電圧（分圧回路）※任意 | 同じ |
+
+- 電源はタイマーと同じ 5V（モバイルバッテリーなど）です。C5 は必ず 5V から給電します。モバイルバッテリーのときは電圧の表示・アラームは使いません（分圧回路は付けず、電圧アラームは OFF のまま）。
+- タイマーから書き換えるときは、一度「デバイスを消去する」にチェックを入れて書き込むと、タイマーの設定が残りません（netpack の設定は初期値になります）。
+- **更新**：netpack の「更新」の「ネットから更新」は、タイマー流用版のファイル（`elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin`）を取りに行きます。「ファイルから」では、通常版のファイルを選ぶと書き込む前に止まります（通常版の netpack にタイマー流用版を選んだときも同じです）。C5（ブリッジ）は USB で Web 書き込みページから更新します。
+- タイマーに戻すときは、FPV C5 Lap Timer の Web 書き込みページで S3 にタイマー、C5 に受信機（FPVGate C5MK）を書き込みます。
+
 ---
 
 ## 書き込み
@@ -95,7 +120,7 @@ TX と RX は**交差**させます。
 
 PC の **Chrome / Edge** で **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/)** を開き、機器を USB でつないで「書き込む」を押します。
 
-- **ELRS-NETpack（XIAO ESP32-S3）** と **ELRSバックパック-ブリッジ**（ハード：XIAO C3 / XIAO C5 / Wrover-E を選択）の最新リリースを書き込めます。
+- **ELRS-NETpack（XIAO ESP32-S3）**（配線：通常 / タイマー流用を選択）と **ELRSバックパック-ブリッジ**（ハード：XIAO C3 / XIAO C5 / XIAO C5（タイマー流用）/ Wrover-E を選択）の最新リリースを書き込めます。
 - 「**ファイルを指定して書き込む**」では、手元の .bin（試験版・前の版）やリリースの zip を選んで書き込めます。アドレスはファイル名から自動で入ります（変更可）。firmware.bin には「最初のアプリから起動」（otadata）が自動で付きます。
 - 「デバイスを消去する」「すべて消去」にチェックを入れなければ、WiFi などの設定は残ります。
 - つながらないときは、BOOT ボタンを押したまま USB を挿し直すと書き込みモードになります。
@@ -105,7 +130,7 @@ PC の **Chrome / Edge** で **[https://yanazoo.github.io/elrs-netpack/](https:/
 netpack の設定ページ →「**更新**」（`/update`）：
 
 - **ネットから更新**：「🔍 最新版を確認」→「⬇️ 〜に更新」。インターネットが必要です（クライアントモードのルーター、またはホストモードの USB テザリング）。
-- **ファイルから**：firmware.bin（`elrs-netpack-xiao_esp32s3-firmware.bin`、またはリリース zip の中）を選んで「ファイルで更新」。
+- **ファイルから**：firmware.bin（`elrs-netpack-xiao_esp32s3-firmware.bin`、またはリリース zip の中）を選んで「ファイルで更新」。タイマー流用版は `elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin` です（違う版のファイルは書き込む前に止まります）。
 
 ### リリースのファイル
 
@@ -114,9 +139,10 @@ netpack の設定ページ →「**更新**」（`/update`）：
 | ファイル | 中身 |
 |---|---|
 | `elrs-netpack-<版>-xiao_esp32s3.zip` | netpack の XIAO（bootloader・partitions・firmware） |
-| `elrs-espnow-bridge-<版>-<ボード>.zip` | ブリッジ（`xiao_esp32c3` / `xiao_esp32c5` / `esp32dev`） |
+| `elrs-netpack-<版>-xiao_esp32s3_timerwiring.zip` | 同じ、タイマー流用版 |
+| `elrs-espnow-bridge-<版>-<ボード>.zip` | ブリッジ（`xiao_esp32c3` / `xiao_esp32c5` / `xiao_esp32c5_timerwiring`（タイマー流用）/ `esp32dev`） |
 | `*-full.bin` | 1 つにまとめたもの（アドレス `0x0` に書き込む。esptool-js など） |
-| `elrs-netpack-xiao_esp32s3-firmware.bin`・`elrs-netpack-version.txt` | netpack の「ネットから更新」用 |
+| `elrs-netpack-xiao_esp32s3-firmware.bin`・`elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin`・`elrs-netpack-version.txt` | netpack の「ネットから更新」用（通常版・タイマー流用版） |
 
 > Web 書き込みページは、リリースのたびに GitHub Actions が作って GitHub Pages に置きます（リポジトリの Settings → Pages → Source を **GitHub Actions** にしておく必要があります）。
 
@@ -136,6 +162,8 @@ netpack の設定ページ →「**更新**」（`/update`）：
 | ブリッジ（XIAO C3、おすすめ） | `pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload --upload-port COMx` |
 | ブリッジ（XIAO C5、代わりに使う場合） | `pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload --upload-port COMx` |
 | ブリッジ（Wrover-E、代わりに使う場合） | `pio run -d elrs-espnow-bridge -e esp32dev -t upload --upload-port COMx` |
+| タイマー流用版の S3 | `pio run -d elrs-xiao-webui -e xiao_esp32s3_timerwiring -t upload --upload-port COMx` |
+| タイマー流用版の C5（ブリッジ） | `pio run -d elrs-espnow-bridge -e xiao_esp32c5_timerwiring -t upload --upload-port COMx` |
 
 - netpack の XIAO と XIAO C5 のブリッジは pioarduino（Arduino-ESP32 3.3）でビルドします。初回はパッケージのダウンロードに時間がかかります。
 - 書き込めないときは、BOOT ボタンを押したまま RST を押して離し、BOOT を離してから書き込みます。

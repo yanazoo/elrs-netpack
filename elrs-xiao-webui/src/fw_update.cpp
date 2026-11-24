@@ -7,6 +7,7 @@
 #include <Update.h>
 #include <WiFi.h>
 #include <time.h>
+#include "config.h"
 #include "log.h"
 #include "web.h"
 
@@ -19,12 +20,26 @@
 
 const char *fwVersion() { return FW_VERSION; }
 const char *fwBuild() { return FW_BUILD; }
+const char *fwVariant() { return NP_VARIANT; }
+bool fwTimerWiring() { return strcmp(NP_VARIANT, "std") != 0; }
+
+// The build's mark, in the firmware image: "@@NPV=<variant>@@". A file
+// written from the update page is looked through for it as it arrives,
+// and refused if it is the other build's (a file with no mark is an older
+// release: the standard build).
+extern "C" __attribute__((used)) const char np_variant_mark[] = "@@NPV=" NP_VARIANT "@@";
 
 namespace {
 
 const char *const kReleases = "https://github.com/yanazoo/elrs-netpack/releases";
 const char *const kVerAsset = "elrs-netpack-version.txt";
+// The online update's file, the same name in every release; the timerwiring
+// build has its own (its pins differ: the standard file would not work).
+#if NP_TIMER_WIRING
+const char *const kFwAsset  = "elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin";
+#else
 const char *const kFwAsset  = "elrs-netpack-xiao_esp32s3-firmware.bin";
+#endif
 
 enum State : uint8_t { kIdle, kChecking, kChecked, kUpdating, kDone, kFailed };
 const char *const kStateNames[] = {"idle", "checking", "checked", "updating", "done", "failed"};
@@ -49,6 +64,37 @@ char    error[160] = "";
 volatile bool taskRunning = false;
 bool    uploadOk = false;
 bool    uploadBegan = false;
+String  uploadErr;   // why the file was refused ("" : Update's own error)
+
+// Finds the build's mark ("@@NPV=<variant>@@") in a file as it arrives.
+struct MarkScan {
+    uint8_t m = 0;        // characters of the prefix matched
+    bool    in = false;   // reading the variant name
+    char    name[16];
+    uint8_t n = 0;
+    char    found[16];    // the first mark's variant ("": none yet)
+    void reset() { m = 0; in = false; n = 0; found[0] = 0; }
+    void feed(const uint8_t *d, size_t len)
+    {
+        static const char pre[] = {'@', '@', 'N', 'P', 'V', '=', 0};
+        for (size_t i = 0; i < len && !found[0]; i++) {
+            char c = (char)d[i];
+            if (in) {
+                if (c == '@' && n) { name[n] = 0; strlcpy(found, name, sizeof found); in = false; }
+                else if (((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) && n < sizeof name - 1) name[n++] = c;
+                else in = false;   // not a mark (the prefix on its own)
+                m = c == '@' ? 1 : 0;
+                continue;
+            }
+            if (c == pre[m]) {
+                if (++m == 6) { in = true; n = 0; m = 0; }
+            } else {
+                m = c == '@' ? (m == 2 ? 2 : 1) : 0;
+            }
+        }
+    }
+};
+MarkScan markScan;
 
 bool ja() { return g_ja ? g_ja() : true; }
 const char *L(const char *en, const char *jp) { return ja() ? jp : en; }
@@ -182,7 +228,11 @@ void updateTask(void *)
     LOG.printf("[update] firmware %s\n", tag);
     String url = String(kReleases) + "/download/" + tag + "/" + kFwAsset;
     t_httpUpdate_return r = HTTP_UPDATE_FAILED;
-    if (getFinal(url, nullptr, e, sizeof e) == 200) {
+    int code = getFinal(url, nullptr, e, sizeof e);
+    if (code == 404 && fwTimerWiring())
+        snprintf(e, sizeof e, "%s", L("this release has no timerwiring build (nothing written)",
+                                      "このリリースにはタイマー流用版がありません（書き込んでいません）"));
+    if (code == 200) {
         NetworkClientSecure tls;
         useRootStore(tls);
         r = httpUpdate.update(tls, url);
@@ -232,7 +282,9 @@ String page(const String &msg = "")
     String p = g_head(L("Update", "ファーム更新"));
     p += "<h2>"; p += L("Firmware", "ファーム"); p += "</h2>";
     p += "<div class='card st'>"; p += L("This firmware: ", "今のファーム："); p += FW_VERSION;
-    p += "（"; p += FW_BUILD; p += "）</div>";
+    p += "（"; p += FW_BUILD; p += "）";
+    if (fwTimerWiring()) { p += "<br>"; p += L("Build for an FPV C5 Lap Timer made into a netpack (timerwiring)", "タイマー流用版（timerwiring）"); }
+    p += "</div>";
     if (msg.length()) { p += "<div class='msg'>"; p += msg; p += "</div>"; }
 
     p += "<h2>"; p += L("From the internet", "ネットから更新"); p += "</h2>";
@@ -246,8 +298,13 @@ String page(const String &msg = "")
 
     p += "<h2>"; p += L("From a file", "ファイルから"); p += "</h2>";
     p += "<form id='ff' method='POST' action='/update' enctype='multipart/form-data'>";
-    p += "<label>"; p += L("firmware.bin of elrs-xiao-webui (in the release zip, or elrs-netpack-xiao_esp32s3-firmware.bin)",
-                           "elrs-xiao-webui の firmware.bin（リリースの zip の中、または elrs-netpack-xiao_esp32s3-firmware.bin）");
+    p += "<label>";
+    if (fwTimerWiring())
+        p += L("firmware.bin of the timerwiring build (in its release zip, or elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin)",
+               "タイマー流用版の firmware.bin（流用版のリリースの zip の中、または elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin）");
+    else
+        p += L("firmware.bin of elrs-xiao-webui (in the release zip, or elrs-netpack-xiao_esp32s3-firmware.bin)",
+               "elrs-xiao-webui の firmware.bin（リリースの zip の中、または elrs-netpack-xiao_esp32s3-firmware.bin）");
     p += "<input type='file' name='fw' accept='.bin'></label>";
     p += "<button type='submit' id='fb'>"; p += L("Write the file", "ファイルで更新"); p += "</button>";
     p += "</form>";
@@ -313,10 +370,24 @@ void handleUpload(AsyncWebServerRequest *r, const String &name, size_t index, ui
     if (index == 0) {
         LOG.printf("[update] file %s\n", name.c_str());
         uploadBegan = true;
+        uploadErr = "";
+        markScan.reset();
         uploadOk = authed() && !taskRunning && Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
     }
+    if (uploadOk && len) markScan.feed(data, len);
     if (uploadOk && len && Update.write(data, len) != len) uploadOk = false;
     if (final) {
+        // The other build's file: its pins are not this netpack's.
+        const char *v = markScan.found[0] ? markScan.found : "std";
+        if (uploadOk && strcmp(v, NP_VARIANT) != 0) {
+            uploadOk = false;
+            uploadErr = strcmp(NP_VARIANT, "std") == 0
+                ? L("this file is the build for an FPV C5 Lap Timer made into a netpack (timerwiring): choose elrs-netpack-xiao_esp32s3-firmware.bin",
+                    "このファイルはタイマー流用版（timerwiring）です。通常版の elrs-netpack-xiao_esp32s3-firmware.bin を選んでください")
+                : L("this file is the standard build: choose elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin",
+                    "このファイルは通常版です。タイマー流用版の elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin を選んでください");
+            LOG.printf("[update] refused: a %s file on a %s netpack\n", v, NP_VARIANT);
+        }
         uploadOk = uploadOk && Update.end(true);
         if (!uploadOk && Update.isRunning()) Update.abort();
         LOG.printf("[update] %s (%u bytes)\n", uploadOk ? "ok" : Update.errorString(), (unsigned)(index + len));
@@ -334,7 +405,7 @@ void handleUploadDone()
         return;
     }
     if (webServer.hasArg("ajax")) {   // the page's progress bar
-        String e = ok ? "" : String(Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"));
+        String e = ok ? "" : uploadErr.length() ? uploadErr : String(Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"));
         e.replace("\"", "'");
         webServer.send(200, "application/json", ok ? String("{\"ok\":true}") : "{\"ok\":false,\"error\":\"" + e + "\"}");
         if (ok) webServer.restartSoon(800);
@@ -342,7 +413,7 @@ void handleUploadDone()
     }
     if (!ok) {
         webServer.send(200, "text/html", page(String(L("Update failed: ", "更新できませんでした：")) +
-                                           (Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"))));
+                                           (uploadErr.length() ? uploadErr.c_str() : Update.hasError() ? Update.errorString() : L("no file", "ファイルがありません"))));
         return;
     }
     webServer.send(200, "text/html", page(L("Written. Restarting…", "書き込みました。再起動します…")));
@@ -354,6 +425,8 @@ void handleUploadDone()
 void fwUpdateRoutes(bool (*online)(), String (*head)(const char *), bool (*jaFn)(), bool (*authedFn)())
 {
     Web &web = webServer;
+    // Also keeps the mark in the image (the linker drops what nothing uses).
+    LOG.printf("[update] build %.*s\n", (int)(strlen(np_variant_mark) - 8), np_variant_mark + 6);
     g_authed = authedFn;
     g_online = online;
     g_head = head;

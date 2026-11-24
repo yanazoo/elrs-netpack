@@ -87,6 +87,31 @@ TX and RX **cross**.
 
 > Don't join 3V3 / 5V between the boards (GND only). Power each board over USB, or from one supply to each board's 5V / GND.
 
+### An FPV C5 Lap Timer made into a netpack (timerwiring build)
+
+An FPV C5 Lap Timer built without a bridge (XIAO ESP32-S3 + XIAO ESP32-C5) becomes a netpack **with no rewiring**: the C5 runs the ELRS Backpack bridge, the S3 the netpack. It works as any netpack.
+
+| Board | Write (web flasher) |
+|---|---|
+| S3 | ELRS-NETpack, wiring "**タイマー流用**" (timer's wiring) |
+| C5 | ELRS Backpack bridge, board "**XIAO ESP32-C5（タイマー流用）**" |
+
+The timer's wiring stays (UART S3 D3/D4 ⇔ C5 D4/D5, 5V to both, common GND).
+
+| timerwiring S3 | Use | Standard netpack |
+|---|---|---|
+| D3 / GPIO4 (TX) → C5 D4 / GPIO23 (RX) | to the bridge | D0 / GPIO1 |
+| D4 / GPIO5 (RX) ← C5 D5 / GPIO24 (TX) | from the bridge | D1 / GPIO2 |
+| D5 / GPIO6 | buzzer + (− to GND), optional | D3 / GPIO4 (+), D5 / GPIO6 (−) |
+| D1 / GPIO2 | mode switch (to GND), optional | D4 / GPIO5 |
+| D0 / GPIO1 | notification LED, optional | GPIO9 |
+| D2 / GPIO3 | LiPo voltage (divider), optional | same |
+
+- Power as the timer: 5V (a power bank) to both boards; the C5 always from 5V. On a power bank, leave the voltage display and alarm unused (no divider, alarm off).
+- When rewriting a timer, tick "Erase device" once so nothing of the timer's settings stays (the netpack starts from its defaults).
+- **Updates**: the netpack's online update takes the timerwiring file (`elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin`); "from a file" refuses a standard file before writing it (and a standard netpack refuses a timerwiring file). The C5 (bridge) is updated over USB from the web flasher.
+- Back to a timer: write the timer to the S3 and the receiver (FPVGate C5MK) to the C5 from FPV C5 Lap Timer's web flasher.
+
 ---
 
 ## Writing the firmware
@@ -95,7 +120,7 @@ TX and RX **cross**.
 
 Open **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/)** in **Chrome / Edge** on a PC, plug the device in by USB and press "書き込む" (write).
 
-- Writes the latest release of **ELRS-NETpack (XIAO ESP32-S3)** and the **ELRS Backpack bridge** (pick the board: XIAO C3 / XIAO C5 / Wrover-E).
+- Writes the latest release of **ELRS-NETpack (XIAO ESP32-S3)** (wiring: standard / timer's) and the **ELRS Backpack bridge** (pick the board: XIAO C3 / XIAO C5 / XIAO C5 timer's wiring / Wrover-E).
 - "**ファイルを指定して書き込む**" (your own files) writes .bin files (a test build, an older release) or a release zip. Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot.
 - Leave "Erase device" / "erase all" unticked to keep the settings (WiFi and so on).
 - If it can't connect, hold BOOT while plugging the board in (download mode).
@@ -105,7 +130,7 @@ Open **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-
 netpack settings → "**更新**" (Update, `/update`):
 
 - **Online**: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update). Needs the internet (a router in client mode, or USB tethering in host mode).
-- **A file**: pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin`, or the one in the release zip).
+- **A file**: pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin`, or the one in the release zip). The timerwiring build's is `elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin` (the other build's file is refused before it is written).
 
 ### Release files
 
@@ -114,9 +139,10 @@ netpack settings → "**更新**" (Update, `/update`):
 | File | Contents |
 |---|---|
 | `elrs-netpack-<version>-xiao_esp32s3.zip` | netpack XIAO (bootloader, partitions, firmware) |
-| `elrs-espnow-bridge-<version>-<board>.zip` | bridge (`xiao_esp32c3` / `xiao_esp32c5` / `esp32dev`) |
+| `elrs-netpack-<version>-xiao_esp32s3_timerwiring.zip` | the same, timerwiring build |
+| `elrs-espnow-bridge-<version>-<board>.zip` | bridge (`xiao_esp32c3` / `xiao_esp32c5` / `xiao_esp32c5_timerwiring` / `esp32dev`) |
 | `*-full.bin` | one image, written at `0x0` (esptool-js and others) |
-| `elrs-netpack-xiao_esp32s3-firmware.bin`, `elrs-netpack-version.txt` | for the netpack's online update |
+| `elrs-netpack-xiao_esp32s3-firmware.bin`, `elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin`, `elrs-netpack-version.txt` | for the netpack's online update (standard, timerwiring) |
 
 > GitHub Actions builds the web flasher at each release and puts it on GitHub Pages (Settings → Pages → Source must be **GitHub Actions**).
 
@@ -136,6 +162,8 @@ netpack settings → "**更新**" (Update, `/update`):
 | bridge (XIAO C3, recommended) | `pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload --upload-port COMx` |
 | bridge (XIAO C5, instead) | `pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload --upload-port COMx` |
 | bridge (Wrover-E, instead) | `pio run -d elrs-espnow-bridge -e esp32dev -t upload --upload-port COMx` |
+| timerwiring S3 | `pio run -d elrs-xiao-webui -e xiao_esp32s3_timerwiring -t upload --upload-port COMx` |
+| timerwiring C5 (bridge) | `pio run -d elrs-espnow-bridge -e xiao_esp32c5_timerwiring -t upload --upload-port COMx` |
 
 - The netpack XIAO and the XIAO C5 bridge build with pioarduino (Arduino-ESP32 3.3); the first build downloads its packages and takes a while.
 - If writing fails: hold BOOT, press and release RST, release BOOT, then write.

@@ -92,17 +92,22 @@ def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.makedirs(site, exist_ok=True)
     shutil.copy(os.path.join(root, "docs", "flasher", "index.html"), os.path.join(site, "index.html"))
-    s3 = os.path.join(root, "elrs-xiao-webui", ".pio", "build", "xiao_esp32s3")
+    np = os.path.join(root, "elrs-xiao-webui", ".pio", "build")
     br = os.path.join(root, "elrs-espnow-bridge", ".pio", "build")
     devices = [
-        device(site, "netpack-s3", "ELRS-NETpack（XIAO ESP32-S3）", "ESP32-S3", s3,
+        device(site, "netpack-s3", "ELRS-NETpack（XIAO ESP32-S3）", "ESP32-S3", os.path.join(np, "xiao_esp32s3"),
                "elrs-netpack-%s-xiao_esp32s3-full.bin" % tag),
+        # An FPV C5 Lap Timer made into a netpack: the timer's own wiring.
+        device(site, "netpack-s3-tw", "ELRS-NETpack（XIAO ESP32-S3・タイマー流用）", "ESP32-S3",
+               os.path.join(np, "xiao_esp32s3_timerwiring"), "elrs-netpack-%s-xiao_esp32s3_timerwiring-full.bin" % tag),
         device(site, "bridge-c3", "ELRSバックパック-ブリッジ（XIAO ESP32-C3）", "ESP32-C3",
                os.path.join(br, "xiao_esp32c3"), "elrs-espnow-bridge-%s-xiao_esp32c3-full.bin" % tag),
         device(site, "bridge-esp32", "ELRSバックパック-ブリッジ（ESP32 Wrover-E）", "ESP32",
                os.path.join(br, "esp32dev"), "elrs-espnow-bridge-%s-esp32dev-full.bin" % tag),
         device(site, "bridge-c5", "ELRSバックパック-ブリッジ（XIAO ESP32-C5）", "ESP32-C5",
                os.path.join(br, "xiao_esp32c5"), "elrs-espnow-bridge-%s-xiao_esp32c5-full.bin" % tag),
+        device(site, "bridge-c5-tw", "ELRSバックパック-ブリッジ（XIAO ESP32-C5・タイマー流用）", "ESP32-C5",
+               os.path.join(br, "xiao_esp32c5_timerwiring"), "elrs-espnow-bridge-%s-xiao_esp32c5_timerwiring-full.bin" % tag),
     ]
     for d in devices:
         manifest = {
