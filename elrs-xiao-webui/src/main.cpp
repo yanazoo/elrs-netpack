@@ -816,8 +816,8 @@ static String pageVoltage(const String &msg = "")
     if (msg.length())  { p += "<div class='msg'>"; p += msg; p += "</div>"; }
     p += "<form method='POST' action='/voltage'>";
     p += "<label>"; p += L("Divider ratio (e.g. 2.0 for equal resistors)", "分圧比 (例: 100kΩ×2なら2.0)");
-    p += "<input type='number' name='ratio' step='0.01' min='1' value='";
-    snprintf(buf, sizeof(buf), "%.2f", g_vbatRatio);
+    p += "<input type='number' name='ratio' step='0.001' min='1' value='";
+    snprintf(buf, sizeof(buf), "%.3f", g_vbatRatio);
     p += buf; p += "'></label>";
     p += "<label>"; p += L("Alarm threshold (V)", "アラーム閾値 (V)");
     p += "<input type='number' name='alarm' step='0.01' min='2' max='5' value='";
@@ -836,6 +836,17 @@ static String pageVoltage(const String &msg = "")
     if (g_ledEnabled) p += " checked";
     p += "><span>"; p += L("LED (notifications &amp; alarm)", "LED (通知・アラーム)"); p += "</span></div>";
     p += "<button type='submit'>"; p += L("Save", "保存"); p += "</button>";
+    p += "</form>";
+    // Calibration: the voltage measured with a meter sets the divider ratio.
+    p += "<h2>"; p += L("Calibrate", "校正"); p += "</h2>";
+    p += "<div class='note'>";
+    p += L("Measure the battery with a meter and enter it: the divider ratio is worked out from it and saved (resistor and ADC tolerances make the reading a little off).",
+           "テスターでバッテリーの電圧を測って入れると、分圧比を計算して保存します（抵抗や ADC の誤差で、表示が少しずれることがあります）。");
+    p += "</div>";
+    p += "<form method='POST' action='/voltage/cal'>";
+    p += "<label>"; p += L("Measured voltage (V)", "実際の電圧（V）");
+    p += "<input type='number' name='actual' step='0.01' min='0.5' max='30' required></label>";
+    p += "<button type='submit'>"; p += L("Calibrate", "校正する"); p += "</button>";
     p += "</form></body></html>";
     return p;
 }
@@ -1455,6 +1466,45 @@ static void handleWifiPost()
     g_reconnectAt = (millis() + 420) | 1;   // loop() joins the network (not in the handler)
 }
 
+// The divider ratio from a voltage measured with a meter: a fresh reading
+// of the ADC pin (the same averaging as updateVoltage), ratio = measured /
+// pin voltage.
+static void handleVoltageCal()
+{
+    if (needLogin()) return;
+    float actual = webServer.arg("actual").toFloat();
+    uint32_t sum = 0;
+    for (int i = 0; i < 16; i++) sum += analogReadMilliVolts(VBAT_ADC_PIN);
+    float pinV = (sum / 16.0f) / 1000.0f;
+    String msg;
+    if (actual < 0.5f || actual > 30.0f) {
+        msg = L("Enter the measured voltage (0.5-30 V).", "実際の電圧を入れてください（0.5〜30 V）。");
+    } else if (pinV < 0.2f) {
+        msg = L("No voltage on the divider pin (check the wiring): not calibrated.",
+                "分圧回路のピンに電圧がありません（配線を確認してください）。校正していません。");
+    } else {
+        float ratio = actual / pinV;
+        if (ratio < 1.0f || ratio > 10.0f) {
+            char b[160];
+            snprintf(b, sizeof b, "%s %.3f", L("The ratio would be out of range (1-10), not calibrated:",
+                                               "分圧比が範囲（1〜10）を外れるため、校正していません："), ratio);
+            msg = b;
+        } else {
+            g_vbatRatio = ratio;
+            g_currentVoltage = pinV * ratio;
+            prefs.begin("elrs", false);
+            prefs.putFloat("vbatRatio", g_vbatRatio);
+            prefs.end();
+            char b[160];
+            snprintf(b, sizeof b, "%s %.3f", L("Calibrated: divider ratio", "校正しました：分圧比"), ratio);
+            msg = b;
+            LOG.printf("[vbat] calibrated: %.2f V measured, pin %.3f V, ratio %.3f\n", actual, pinV, ratio);
+            g_beepReq = true;
+        }
+    }
+    webServer.send(200, "text/html", pageVoltage(msg));
+}
+
 static void handleVoltagePost()
 {
     if (needLogin()) return;
@@ -1700,6 +1750,7 @@ void setup()
     webServer.on("/login",               HTTP_POST, handleLoginPost);
     webServer.on("/logout",              HTTP_GET,  handleLogout);
     webServer.on("/voltage",             HTTP_POST, handleVoltagePost);
+    webServer.on("/voltage/cal",         HTTP_POST, handleVoltageCal);
     webServer.on("/lang",                HTTP_GET,  handleLangToggle);
     // Firmware update: from the internet (a router, or USB tethering) or a file.
     fwUpdateRoutes(
