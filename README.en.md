@@ -245,7 +245,7 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 
 Changing the connection, the host's WiFi or tethering restarts the netpack after saving.
 
-> **WiFi channel**: ESP-NOW is fixed on **channel 1** (the ELRS VRx backpack's). Keep the router the netpack joins, and the host-mode WiFi, on 2.4 GHz **channels 6-11** (1-4 compete with the OSD).
+> **WiFi channel**: ESP-NOW is fixed on **channel 1** (the ELRS VRx backpack's). Keep the router the netpack joins, and the host-mode WiFi, on 2.4 GHz **channels 6-11** (1-4 compete with the OSD). The netpack's WiFi is **20 MHz wide** in host mode, client mode and the setup WiFi alike (v2.3.3; 40 MHz would also cover the neighbouring channels).
 
 ---
 

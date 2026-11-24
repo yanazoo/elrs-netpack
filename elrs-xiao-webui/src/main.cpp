@@ -851,8 +851,12 @@ static void startCaptivePortal()
     // the timer's AP was not up within 30 s of boot, or was off for 60 s.
     g_apRetrySta = configured;
     WiFi.mode(configured ? WIFI_AP_STA : WIFI_AP);
+    if (configured) esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);   // before it joins
     esp_wifi_set_max_tx_power(84);
     WiFi.softAP(ap_ssid, ap_password);
+    // 20 MHz wide, as every WiFi here (host mode, client mode, FPV C5 Lap
+    // Timer): 40 MHz covers the neighbouring channels for no gain.
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
     if (configured) {
         WiFi.setAutoReconnect(false);
         staBegin(pickNetwork());
@@ -1164,6 +1168,11 @@ static void wifiConnect()
 
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
+    // 20 MHz wide, set before joining: as host mode and FPV C5 Lap Timer.
+    // A router on 40 MHz is joined on its 20 MHz part; 40 MHz would also
+    // cover the neighbouring channels (towards ESP-NOW's ch 1 and the
+    // pilots' ELRS) for speed the netpack doesn't need.
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
     // No modem sleep as a client: dozing between beacons, the station misses
     // some and the router (or the ESP) takes it for gone (a short drop that
     // used to set off the WiFi warning while the WiFi was fine). FPV C5 Lap
