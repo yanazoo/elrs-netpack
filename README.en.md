@@ -61,6 +61,26 @@
 
 ---
 
+## Day-to-day use
+
+**Client mode (joining FPV C5 Lap Timer's WiFi or the venue's router)**
+
+1. Power FPV C5 Lap Timer (or the router) first.
+2. Power the netpack and the bridge. Joining the WiFi gives **2 short beeps** (the notification LED flashes twice too).
+3. When FPV C5 Lap Timer finds the netpack and opens the OSD connection (TCP 8080): **1 short beep**. Ready. The notification LED keeps a faint double-pulse heartbeat.
+4. If the connection to FPV C5 Lap Timer drops: **5 long beeps**, and the LED blinks at medium speed until it reconnects. If the netpack's own WiFi is gone for 5 s or more: the buzzer sounds for 5 s and the LED blinks fast.
+
+**Host mode (FPV C5 Lap Timer and the phones join the netpack's WiFi)**
+
+1. Power the netpack and the bridge. The netpack's WiFi (default `ELRS-NETpack`) comes up: **2 short beeps**.
+2. Power FPV C5 Lap Timer (client mode). When it joins and opens the OSD connection: **1 short beep**.
+3. Phones join the netpack's WiFi and open the timer from the QR page at `http://192.168.4.1/` or the "FPV C5 Lap Timer" link on the settings page.
+4. If FPV C5 Lap Timer leaves the netpack's WiFi: **5 long beeps** at once.
+
+**Switching modes**: "接続方式" (connection) on the WiFi settings page, or a [mode switch](#mode-switch) on the box.
+
+---
+
 ## Hardware
 
 | Part | Notes |
@@ -70,7 +90,7 @@
 | (instead) XIAO ESP32-C5 or ESP32 Wrover-E | XIAO ESP32-C5 (small, v2.2.1), ESP32 Wrover-E (any ESP32 dev board with 4 MB+ flash) |
 | 3 jumper wires | TX / RX / GND |
 | USB cables | Writing and power (data-capable) |
-| (optional) passive buzzer, LED, resistors, LiPo | See [Extra hardware](#extra-hardware-optional) |
+| (optional) active buzzer, LED, resistors, switch, LiPo | See [Buzzer, LEDs, mode switch](#buzzer-leds-mode-switch-voltage-optional) |
 | (for USB tethering) USB-C → USB-A OTG adapter | See [USB tethering cabling and power](#usb-tethering-cabling-and-power-important) |
 
 ---
@@ -216,16 +236,12 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 
 **Host mode**: SSID, password (8-63 characters), channel (6-11), **phones / PCs** (1-9, default 5) (v2.3.0).
 - A limit for use as a bridge: **one place is always kept free for FPV C5 Lap Timer**; phones / PCs up to the number set (default 5: settings, a look at FPV C5 Lap Timer).
-- One more is sent off and kept out for 30 s. FPV C5 Lap Timer is known as the device its OSD connection (TCP) came from (once seen, it can always join).
+- One more is sent off and kept out for 30 s. FPV C5 Lap Timer is learnt from its own OSD connection (once seen, it can always join; RotorHazard or another device on TCP 8080 is not learnt) (v2.3.1).
 - Raise it for a crowd watching on the netpack's WiFi (10 devices in all at most).
 
 **USB tethering**: on / off (host mode only).
 
-**Mode switch** (v2.3.0): host or client mode chosen by a switch on the box.
-- On the settings page, tick "**物理スイッチを使う**" (use a mode switch); unticked by default.
-- Wire it between **D4 (GPIO5) and GND** (internal pull-up, no resistor). **ON (connected) = host mode, OFF = client mode.**
-- It is read **at start-up only**: after switching, power-cycle (or restart). Switching while running does nothing.
-- While a switch is set, it decides the mode over the page's choice (kept for when the switch is set to none). The page shows the switch and the mode at this start-up.
+**Mode switch** (v2.3.0): host or client mode chosen by a switch on the box; tick "**物理スイッチを使う**" (use a mode switch, unticked by default). Wiring and use: [Mode switch](#mode-switch).
 
 Changing the connection, the host's WiFi or tethering restarts the netpack after saving.
 
@@ -286,26 +302,82 @@ Settings → ELRS Backpack General
 
 ---
 
-## Extra hardware (optional)
+## Buzzer, LEDs, mode switch, voltage (optional)
+
+The netpack works without any of them. With them, you hear and see it connect and drop, and pick the mode with a switch.
+
+### Parts
 
 | Part | Notes |
 |---|---|
-| Passive buzzer | GPIO4 (+) / GPIO6 (−) |
-| 7-color auto-cycling LED | GPIO9 (D10) + **100 Ω resistor** in series |
-| 2 × 100 kΩ resistors | LiPo voltage divider |
-| LiPo battery | 1S recommended (shared by the netpack XIAO and the bridge) |
+| **Active buzzer** (sounds on 3.3 V) | The kind that sounds when powered (built-in oscillator). The netpack only switches it on and off: a passive buzzer (piezo speaker) stays silent |
+| Notification LED (a self-cycling 7-colour LED or similar) + **100 Ω resistor** | The resistor in series, always (it protects the GPIO) |
+| Toggle switch (SPST is enough) | For the mode. No resistor (internal pull-up) |
+| 100 kΩ resistors × 2 | Voltage divider for a 1S LiPo |
 
-| XIAO GPIO | Pin | Connects to |
+### Wiring
+
+| Use | Standard netpack | [timerwiring build](#an-fpv-c5-lap-timer-made-into-a-netpack-timerwiring-build) |
 |---|---|---|
-| GPIO3 | D2 / A0 | Divider midpoint (LiPo+ → R1 100kΩ → GPIO3 → R2 100kΩ → GND) |
-| GPIO4 | D3 | Buzzer + |
-| GPIO6 | D5 | Buzzer − |
-| GPIO9 | D10 | LED anode (+ 100 Ω → GND) |
-| GPIO21 | — | Built-in LED (active-LOW, on board) |
-| GPIO43 | D6 | Log out (UART0 TX, while USB tethering is on) |
-| GPIO5 | D4 | Mode switch (optional; other side to GND, internal pull-up) (v2.3.0) |
+| Buzzer + | D3 / GPIO4 | D5 / GPIO6 |
+| Buzzer − | D5 / GPIO6 | GND |
+| Notification LED (+100 Ω → LED → GND) | D10 / GPIO9 | D0 / GPIO1 |
+| Mode switch (other side to GND) | D4 / GPIO5 | D1 / GPIO2 |
+| Voltage (LiPo+ → 100 kΩ → **here** → 100 kΩ → GND) | D2 / GPIO3 | D2 / GPIO3 |
+| Built-in LED (on the board) | GPIO21 | GPIO21 |
+| Log output (while USB tethering is on) | D6 / GPIO43 | D6 / GPIO43 |
 
-> **Important:** always put a **100 Ω** resistor in series with the notification LED (to protect GPIO9).
+### What the buzzer and the notification LED tell
+
+The notification LED flashes along with every beep.
+
+| Buzzer | When |
+|---|---|
+| 1 short | FPV C5 Lap Timer (MSP) connected / WiFi settings saved |
+| 2 short | WiFi joined (client) / host WiFi up / WiFi back after a drop of 5 s or more |
+| **5 long** | **The connection to FPV C5 Lap Timer dropped** (after it had connected). Host mode: as soon as the timer leaves the netpack's WiFi; otherwise in about 22 s (TCP keepalive) |
+| 5 s on | The netpack's own WiFi gone for 5 s or more (client mode). A drop of a few seconds is silent |
+| On and on | Voltage alarm (below the threshold; stops when it recovers) |
+
+**Notification LED** (the first that applies)
+
+| State | Light |
+|---|---|
+| Setup WiFi (`ELRS-NETpack-Setup`) up | slow blink (0.5 s) |
+| The netpack's WiFi gone for 5 s or more (client mode) | fast blink (0.08 s) until it rejoins |
+| The connection to FPV C5 Lap Timer dropped (after it had connected) | medium blink (0.3 s) until it reconnects |
+| Voltage alarm | on |
+| Normal (joined, or host mode) | faint double pulse every 2 s (heartbeat) |
+| LED switched off | off |
+
+**Built-in LED**: on while joining WiFi, blinking (0.2 s) with the setup WiFi up, off once joined (and in host mode).
+
+**On / off**: the voltage page (`/voltage`) switches the buzzer, the notification LED and the voltage alarm each on or off (buzzer and LED on by default, the voltage alarm off).
+
+### Mode switch
+
+Host or client mode chosen by a switch on the box (v2.3.0), handy at the field without a phone.
+
+**Fitting it**
+1. Wire the switch between the mode pin (D4 / GPIO5 standard, D1 / GPIO2 timerwiring) and **GND**. No resistor.
+2. On the WiFi settings page, tick "**物理スイッチを使う**" (use a mode switch) and save (unticked by default).
+
+**Using it**
+- **ON (connected) = host mode**, **OFF (open) = client mode**.
+- It is read **at power-up (start-up) only**: after switching, power-cycle (or restart from the settings page). Switching while running does nothing.
+- While ticked, the switch decides over the page's "接続方式" (connection); the page shows the switch and the mode at this start-up.
+- Unticked, the mode chosen on the page applies again.
+- Save the host WiFi (SSID, password, channel) and the client networks on the settings page beforehand: the switch only picks which is used.
+
+### Voltage
+
+With the netpack on a 1S LiPo, the buzzer and LED tell when the voltage gets low.
+
+1. Wire the divider LiPo+ → 100 kΩ → D2 / GPIO3 → 100 kΩ → GND.
+2. On the voltage page (`/voltage`), check the ratio `2.0` (100 kΩ + 100 kΩ) and the threshold (default 3.5 V), and switch the voltage alarm on.
+3. Below the threshold, the buzzer sounds on and the notification LED is lit.
+
+On 5V (a power bank or a BEC), leave the divider off and the alarm off (a power bank gives 5V until it is empty, so the voltage tells nothing).
 
 ---
 
@@ -322,7 +394,7 @@ Settings → ELRS Backpack General
 | Firmware update | Online (GitHub release) or from a file |
 | Voltage monitor and alarm | Shows the LiPo voltage; buzzer and LED below the threshold |
 | Buzzer / LED notices | 2 beeps on WiFi joined, 1 on settings saved, 1 when FPV C5 Lap Timer (MSP) connects |
-| Lost-connection notice | **When the TCP (MSP) connection to FPV C5 Lap Timer drops: 5 long beeps and the LED blinking at medium speed** (until it reconnects). In host mode it is noticed as soon as FPV C5 Lap Timer leaves the netpack's WiFi, otherwise in about 11 s (TCP keepalive). The netpack's own WiFi dropping for 5 s or more has its own notice (buzzer for 5 s, fast LED blink; a short drop is reconnected quietly) |
+| Lost-connection notice | **When the TCP (MSP) connection to FPV C5 Lap Timer drops: 5 long beeps and the LED blinking at medium speed** (until it reconnects). In host mode it is noticed as soon as FPV C5 Lap Timer leaves the netpack's WiFi, otherwise in about 22 s (TCP keepalive). The netpack's own WiFi dropping for 5 s or more has its own notice (buzzer for 5 s, fast LED blink; a short drop is reconnected quietly) |
 | Max TX power | 21 dBm on WiFi and ESP-NOW |
 | Backpack version | Reports version 10.1 to the connecting host |
 
@@ -370,24 +442,7 @@ It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID
 
 ## LEDs
 
-**Notification LED (GPIO9 — 7-color auto-cycling)**
-
-| State | Pattern |
-|---|---|
-| Setup WiFi (waiting for settings) | Slow blink, 500 ms |
-| WiFi lost (client mode, for 5 s or more) | Fast blink, 80 ms (until reconnected) |
-| The connection to FPV C5 Lap Timer (MSP) dropped (after it was up) | Medium blink, 300 ms (until it reconnects) |
-| Voltage alarm | On |
-| Normal (client joined, or host mode) | Heartbeat, 2 pulses / 2 s (peak ~4%) |
-| LED disabled | Off |
-
-**Built-in LED (GPIO21 — active-LOW)**
-
-| State | Pattern |
-|---|---|
-| Joining WiFi | On |
-| Setup WiFi | Blink 200 ms |
-| Joined, or host mode | Off |
+See [What the buzzer and the notification LED tell](#what-the-buzzer-and-the-notification-led-tell).
 
 ---
 
@@ -411,7 +466,7 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 | `hPass` | String | `elrs-netpack` | Host mode password |
 | `hCh` | UChar | 6 | Host mode channel (6-11) |
 | `hMax` | UChar | 5 | Host mode phones / PCs (1-9, besides FPV C5 Lap Timer) |
-| `lapMac` | Bytes | — | FPV C5 Lap Timer's MAC (learned from its OSD connection; never sent off by the limit) |
+| `lapMac` | Bytes | — | FPV C5 Lap Timer's MAC (learnt from its own OSD connection; never sent off by the limit) |
 | `tether` | Bool | false | USB tethering (host mode only) |
 | `admPass` | String | `admin` | Admin password (every page but QR; change it) |
 | `loginMin` | UShort | 720 | How long a login lasts (minutes: 5, 30, 60, 360, 720) |
