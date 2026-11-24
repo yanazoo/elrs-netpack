@@ -59,8 +59,8 @@ jobs:
         run: |
           pip install "platformio==6.1.18"
           bash tools/ci_penv.sh
-          pio run -d elrs-xiao-webui -e xiao_esp32s3
-          pio run -d elrs-espnow-bridge -e esp32dev -e xiao_esp32c3 -e xiao_esp32c5
+          pio run -d elrs-xiao-webui -e xiao_esp32s3 -e xiao_esp32s3_timerwiring
+          pio run -d elrs-espnow-bridge -e esp32dev -e xiao_esp32c3 -e xiao_esp32c5 -e xiao_esp32c5_timerwiring
 
       - name: Package
         if: steps.params.outputs.skip == 'false'
@@ -71,9 +71,12 @@ jobs:
             local name="$1" dir="$2"; shift 2
             (cd "$dir" && zip -j "$GITHUB_WORKSPACE/dist/$name" "$@")
           }
-          pack "elrs-netpack-${TAG}-xiao_esp32s3.zip" elrs-xiao-webui/.pio/build/xiao_esp32s3 \
-            bootloader.bin partitions.bin firmware.bin
-          for env in esp32dev xiao_esp32c3 xiao_esp32c5; do
+          # timerwiring: an FPV C5 Lap Timer made into a netpack (its own wiring).
+          for env in xiao_esp32s3 xiao_esp32s3_timerwiring; do
+            pack "elrs-netpack-${TAG}-${env}.zip" elrs-xiao-webui/.pio/build/$env \
+              bootloader.bin partitions.bin firmware.bin
+          done
+          for env in esp32dev xiao_esp32c3 xiao_esp32c5 xiao_esp32c5_timerwiring; do
             pack "elrs-espnow-bridge-${TAG}-${env}.zip" elrs-espnow-bridge/.pio/build/$env \
               bootloader.bin partitions.bin firmware.bin
           done
@@ -82,6 +85,7 @@ jobs:
           # For the netpack's online update: the same names in every release
           # (releases/latest/download/<name>).
           cp elrs-xiao-webui/.pio/build/xiao_esp32s3/firmware.bin dist/elrs-netpack-xiao_esp32s3-firmware.bin
+          cp elrs-xiao-webui/.pio/build/xiao_esp32s3_timerwiring/firmware.bin dist/elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin
           echo "$TAG" > dist/elrs-netpack-version.txt
           ls -l dist
 

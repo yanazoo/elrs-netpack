@@ -125,8 +125,8 @@ static const char *L(const char *en, const char *ja)
 
 // ── buzzer / LED helpers ──────────────────────────────────────────────────────
 
-static void buzzerRawOn()  { digitalWrite(BUZZER_PIN_POS, HIGH); digitalWrite(BUZZER_PIN_NEG, LOW); }
-static void buzzerRawOff() { digitalWrite(BUZZER_PIN_POS, LOW);  digitalWrite(BUZZER_PIN_NEG, LOW); }
+static void buzzerRawOn()  { digitalWrite(BUZZER_PIN_POS, HIGH); if (BUZZER_PIN_NEG >= 0) digitalWrite(BUZZER_PIN_NEG, LOW); }
+static void buzzerRawOff() { digitalWrite(BUZZER_PIN_POS, LOW);  if (BUZZER_PIN_NEG >= 0) digitalWrite(BUZZER_PIN_NEG, LOW); }
 
 // アラーム制御（ブザーのみ — LED は updateNotifyLed() が一元管理）
 static void alarmOn()  { if (g_buzzerEnabled) buzzerRawOn(); }
@@ -522,7 +522,9 @@ static String statusCard()
             p += "<br>";
         }
     }
-    p += L("Firmware ", "ファーム "); p += fwVersion(); p += "（"; p += fwBuild(); p += "）— <a href='/update'>"; p += L("update", "更新"); p += "</a>";
+    p += L("Firmware ", "ファーム "); p += fwVersion(); p += "（"; p += fwBuild(); p += "）";
+    if (fwTimerWiring()) p += L(" timerwiring ", " タイマー流用版 ");
+    p += "— <a href='/update'>"; p += L("update", "更新"); p += "</a>";
     p += "</div>";
     return p;
 }
@@ -545,8 +547,8 @@ static String pageWifi(const String &msg = "")
     p += ">"; p += L("Host: the netpack's own WiFi (FPV C5 Lap Timer and phones join it)", "ホスト：netpack が WiFi を出す（FPV C5 Lap Timer やスマホが接続）"); p += "</label>";
     p += "<div class='chk'><input type='checkbox' name='swMode' value='1'"; if (g_swMode) p += " checked";
     p += "><span>"; p += L("Use a mode switch", "物理スイッチを使う"); p += "</span></div><div class='note'>";
-    p += L("Between D4 (GPIO5) and GND: ON (connected) = host mode, OFF = client mode. Read at start-up (takes effect after a restart).",
-           "D4（GPIO5）と GND の間：ON（つながる）でホストモード、OFF でクライアントモード。起動時に読みます（切り替えは再起動後）。");
+    p += L("Between " MODE_SW_LABEL " and GND: ON (connected) = host mode, OFF = client mode. Read at start-up (takes effect after a restart).",
+           MODE_SW_LABEL_JA " と GND の間：ON（つながる）でホストモード、OFF でクライアントモード。起動時に読みます（切り替えは再起動後）。");
     if (g_swMode) {
         p += "<br><b>"; p += L("At this start-up: switch ", "今回の起動：スイッチ "); p += g_swOn ? "ON" : "OFF";
         p += " → "; p += g_netMode ? L("host mode", "ホストモード") : L("client mode", "クライアントモード"); p += "</b>";
@@ -1639,7 +1641,7 @@ void setup()
 
     builtinLed.init(LED_BUILTIN_PIN, true);  // active-LOW
     pinMode(BUZZER_PIN_POS, OUTPUT);
-    pinMode(BUZZER_PIN_NEG, OUTPUT);
+    if (BUZZER_PIN_NEG >= 0) pinMode(BUZZER_PIN_NEG, OUTPUT);
     pinMode(LED_NOTIFY_PIN, OUTPUT);
     nlWrite(0);                              // GPIO9 初期消灯（analogWrite でPWM初期化）
     buzzerRawOff();

@@ -10,6 +10,8 @@
 
 const char *fwVersion();
 const char *fwBuild();
+const char *fwVariant();   // "std", or "timerwiring" (config.h)
+bool fwTimerWiring();
 // Routes: GET /update (page), POST /update (file), GET /api/update (state),
 // POST /api/update/check, POST /api/update/online.
 // authed: the browser is logged in (else /update goes to /login, the rest
