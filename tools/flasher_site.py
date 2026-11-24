@@ -106,6 +106,9 @@ def main():
                os.path.join(br, "esp32dev"), "elrs-espnow-bridge-%s-esp32dev-full.bin" % tag),
         device(site, "bridge-c5", "ELRSバックパック-ブリッジ（XIAO ESP32-C5）", "ESP32-C5",
                os.path.join(br, "xiao_esp32c5"), "elrs-espnow-bridge-%s-xiao_esp32c5-full.bin" % tag),
+        # A generic ESP32-C5 board (GPIO4 RX / GPIO5 TX).
+        device(site, "bridge-c5-gen", "ELRSバックパック-ブリッジ（ESP32-C5 汎用・GPIO4/5）", "ESP32-C5",
+               os.path.join(br, "esp32c5"), "elrs-espnow-bridge-%s-esp32c5-full.bin" % tag),
         device(site, "bridge-c5-tw", "ELRSバックパック-ブリッジ（XIAO ESP32-C5・タイマー流用）", "ESP32-C5",
                os.path.join(br, "xiao_esp32c5_timerwiring"), "elrs-espnow-bridge-%s-xiao_esp32c5_timerwiring-full.bin" % tag),
     ]

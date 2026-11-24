@@ -99,11 +99,15 @@
 
 TX と RX は**交差**させます。
 
-| netpack の XIAO（S3） | 向き | **XIAO ESP32-C3**（おすすめ） | XIAO ESP32-C5（代わりに） | ESP32 Wrover-E（代わりに） |
-|---|---|---|---|---|
-| D0 / GPIO1（TX） | → | D7 / GPIO20（RX） | D7 / GPIO12（RX） | GPIO26（RX） |
-| D1 / GPIO2（RX） | ← | D6 / GPIO21（TX） | D6 / GPIO11（TX） | GPIO27（TX） |
-| GND | — | GND | GND | GND |
+| netpack の XIAO（S3） | 向き | **XIAO ESP32-C3**（おすすめ） | XIAO ESP32-C5（代わりに） | ESP32-C5 汎用（代わりに） | ESP32 Wrover-E（代わりに） |
+|---|---|---|---|---|---|
+| D0 / GPIO1（TX） | → | D7 / GPIO20（RX） | D7 / GPIO12（RX） | GPIO4（RX） | GPIO26（RX） |
+| D1 / GPIO2（RX） | ← | D6 / GPIO21（TX） | D6 / GPIO11（TX） | GPIO5（TX） | GPIO27（TX） |
+| GND | — | GND | GND | GND | GND |
+
+**XIAO 以外のボード**（v2.3.4）
+- **netpack（S3）**：ESP32-S3-WROOM-1(U)-N16R8 など、**PSRAM 8MB（オクタル）の ESP32-S3** のモジュール・ボードにも、XIAO と同じファームをそのまま書き込めます。配線は上の表の **GPIO 番号**どおりにします（D0 / D1 などの XIAO の名前は使いません）。フラッシュは 8MB 以上あれば使えます（16MB でも可）。
+- **ブリッジ（C5）**：XIAO ではない ESP32-C5 のボード・モジュール（ESP32-C5-WROOM-1、Waveshare ESP32-C5-Zero など。フラッシュ 4MB 以上）は、Web 書き込みページのハード「**ESP32-C5 汎用ボード・モジュール**」を書き込み、**GPIO4（RX）・GPIO5（TX）**でつなぎます。
 
 > 3V3 / 5V はボード間で直接つながないでください（つなぐのは GND だけ）。各ボードを USB などで給電するか、同じ電源から各ボードの 5V / GND へ配線します。
 
@@ -114,7 +118,7 @@ TX と RX は**交差**させます。
 | 機器 | 書き込むもの（Web 書き込みページ） |
 |---|---|
 | S3 | ELRS-NETpack の配線「**タイマー流用**」 |
-| C5 | ELRSバックパック-ブリッジのハード「**XIAO ESP32-C5（タイマー流用）**」 |
+| C5 | ELRSバックパック-ブリッジのハード「**XIAO ESP32-C5（タイマー流用）**」（XIAO ではない ESP32-C5 で組んだタイマー（受信機を GPIO4/5 につないだもの）は「**ESP32-C5 汎用ボード・モジュール**」） |
 
 配線はタイマーのままです（UART は S3 D3/D4 ⇔ C5 D4/D5、電源は 5V を両方に、GND 共通）。
 
@@ -140,7 +144,7 @@ TX と RX は**交差**させます。
 
 PC の **Chrome / Edge** で **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/)** を開き、機器を USB でつないで「書き込む」を押します。
 
-- **ELRS-NETpack（XIAO ESP32-S3）**（配線：通常 / タイマー流用を選択）と **ELRSバックパック-ブリッジ**（ハード：XIAO C3 / XIAO C5 / XIAO C5（タイマー流用）/ Wrover-E を選択）の最新リリースを書き込めます。
+- **ELRS-NETpack（XIAO ESP32-S3）**（配線：通常 / タイマー流用を選択）と **ELRSバックパック-ブリッジ**（ハード：XIAO C3 / XIAO C5 / XIAO C5（タイマー流用）/ ESP32-C5 汎用 / Wrover-E を選択）の最新リリースを書き込めます。
 - 「**ファイルを指定して書き込む**」では、手元の .bin（試験版・前の版）やリリースの zip を選んで書き込めます。アドレスはファイル名から自動で入ります（変更可）。firmware.bin には「最初のアプリから起動」（otadata）が自動で付きます。
 - 「デバイスを消去する」「すべて消去」にチェックを入れなければ、WiFi などの設定は残ります。
 - つながらないときは、BOOT ボタンを押したまま USB を挿し直すと書き込みモードになります。
@@ -160,7 +164,7 @@ netpack の設定ページ →「**更新**」（`/update`）：
 |---|---|
 | `elrs-netpack-<版>-xiao_esp32s3.zip` | netpack の XIAO（bootloader・partitions・firmware） |
 | `elrs-netpack-<版>-xiao_esp32s3_timerwiring.zip` | 同じ、タイマー流用版 |
-| `elrs-espnow-bridge-<版>-<ボード>.zip` | ブリッジ（`xiao_esp32c3` / `xiao_esp32c5` / `xiao_esp32c5_timerwiring`（タイマー流用）/ `esp32dev`） |
+| `elrs-espnow-bridge-<版>-<ボード>.zip` | ブリッジ（`xiao_esp32c3` / `xiao_esp32c5` / `xiao_esp32c5_timerwiring`（タイマー流用）/ `esp32c5`（ESP32-C5 汎用）/ `esp32dev`） |
 | `*-full.bin` | 1 つにまとめたもの（アドレス `0x0` に書き込む。esptool-js など） |
 | `elrs-netpack-xiao_esp32s3-firmware.bin`・`elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin`・`elrs-netpack-version.txt` | netpack の「ネットから更新」用（通常版・タイマー流用版） |
 
@@ -182,6 +186,7 @@ netpack の設定ページ →「**更新**」（`/update`）：
 | ブリッジ（XIAO C3、おすすめ） | `pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload --upload-port COMx` |
 | ブリッジ（XIAO C5、代わりに使う場合） | `pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload --upload-port COMx` |
 | ブリッジ（Wrover-E、代わりに使う場合） | `pio run -d elrs-espnow-bridge -e esp32dev -t upload --upload-port COMx` |
+| ブリッジ（ESP32-C5 汎用） | `pio run -d elrs-espnow-bridge -e esp32c5 -t upload --upload-port COMx` |
 | タイマー流用版の S3 | `pio run -d elrs-xiao-webui -e xiao_esp32s3_timerwiring -t upload --upload-port COMx` |
 | タイマー流用版の C5（ブリッジ） | `pio run -d elrs-espnow-bridge -e xiao_esp32c5_timerwiring -t upload --upload-port COMx` |
 

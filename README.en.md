@@ -99,11 +99,15 @@
 
 TX and RX **cross**.
 
-| netpack XIAO (S3) | | **XIAO ESP32-C3** (recommended) | XIAO ESP32-C5 (instead) | ESP32 Wrover-E (instead) |
-|---|---|---|---|---|
-| D0 / GPIO1 (TX) | → | D7 / GPIO20 (RX) | D7 / GPIO12 (RX) | GPIO26 (RX) |
-| D1 / GPIO2 (RX) | ← | D6 / GPIO21 (TX) | D6 / GPIO11 (TX) | GPIO27 (TX) |
-| GND | — | GND | GND | GND |
+| netpack XIAO (S3) | | **XIAO ESP32-C3** (recommended) | XIAO ESP32-C5 (instead) | generic ESP32-C5 (instead) | ESP32 Wrover-E (instead) |
+|---|---|---|---|---|---|
+| D0 / GPIO1 (TX) | → | D7 / GPIO20 (RX) | D7 / GPIO12 (RX) | GPIO4 (RX) | GPIO26 (RX) |
+| D1 / GPIO2 (RX) | ← | D6 / GPIO21 (TX) | D6 / GPIO11 (TX) | GPIO5 (TX) | GPIO27 (TX) |
+| GND | — | GND | GND | GND | GND |
+
+**Boards other than the XIAO** (v2.3.4)
+- **netpack (S3)**: an **ESP32-S3 with 8 MB octal PSRAM** module or board (ESP32-S3-WROOM-1(U)-N16R8 and the like) takes the same firmware as the XIAO. Wire by the **GPIO numbers** in the table (not the XIAO's D0 / D1 names). 8 MB of flash or more (16 MB is fine).
+- **Bridge (C5)**: an ESP32-C5 board or module that isn't a XIAO (ESP32-C5-WROOM-1, Waveshare ESP32-C5-Zero and the like; 4 MB flash or more): write the web flasher's board "**ESP32-C5 汎用ボード・モジュール**" (generic) and wire **GPIO4 (RX), GPIO5 (TX)**.
 
 > Don't join 3V3 / 5V between the boards (GND only). Power each board over USB, or from one supply to each board's 5V / GND.
 
@@ -114,7 +118,7 @@ An FPV C5 Lap Timer built without a bridge (XIAO ESP32-S3 + XIAO ESP32-C5) becom
 | Board | Write (web flasher) |
 |---|---|
 | S3 | ELRS-NETpack, wiring "**タイマー流用**" (timer's wiring) |
-| C5 | ELRS Backpack bridge, board "**XIAO ESP32-C5（タイマー流用）**" |
+| C5 | ELRS Backpack bridge, board "**XIAO ESP32-C5（タイマー流用）**" (a timer built with a non-XIAO ESP32-C5, its receiver on GPIO4/5: "**ESP32-C5 汎用ボード・モジュール**") |
 
 The timer's wiring stays (UART S3 D3/D4 ⇔ C5 D4/D5, 5V to both, common GND).
 
@@ -140,7 +144,7 @@ The timer's wiring stays (UART S3 D3/D4 ⇔ C5 D4/D5, 5V to both, common GND).
 
 Open **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-netpack/)** in **Chrome / Edge** on a PC, plug the device in by USB and press "書き込む" (write).
 
-- Writes the latest release of **ELRS-NETpack (XIAO ESP32-S3)** (wiring: standard / timer's) and the **ELRS Backpack bridge** (pick the board: XIAO C3 / XIAO C5 / XIAO C5 timer's wiring / Wrover-E).
+- Writes the latest release of **ELRS-NETpack (XIAO ESP32-S3)** (wiring: standard / timer's) and the **ELRS Backpack bridge** (pick the board: XIAO C3 / XIAO C5 / XIAO C5 timer's wiring / generic ESP32-C5 / Wrover-E).
 - "**ファイルを指定して書き込む**" (your own files) writes .bin files (a test build, an older release) or a release zip. Addresses come from the file names (editable); a firmware.bin gets the otadata that starts the first app slot.
 - Leave "Erase device" / "erase all" unticked to keep the settings (WiFi and so on).
 - If it can't connect, hold BOOT while plugging the board in (download mode).
@@ -160,7 +164,7 @@ netpack settings → "**更新**" (Update, `/update`):
 |---|---|
 | `elrs-netpack-<version>-xiao_esp32s3.zip` | netpack XIAO (bootloader, partitions, firmware) |
 | `elrs-netpack-<version>-xiao_esp32s3_timerwiring.zip` | the same, timerwiring build |
-| `elrs-espnow-bridge-<version>-<board>.zip` | bridge (`xiao_esp32c3` / `xiao_esp32c5` / `xiao_esp32c5_timerwiring` / `esp32dev`) |
+| `elrs-espnow-bridge-<version>-<board>.zip` | bridge (`xiao_esp32c3` / `xiao_esp32c5` / `xiao_esp32c5_timerwiring` / `esp32c5` generic / `esp32dev`) |
 | `*-full.bin` | one image, written at `0x0` (esptool-js and others) |
 | `elrs-netpack-xiao_esp32s3-firmware.bin`, `elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin`, `elrs-netpack-version.txt` | for the netpack's online update (standard, timerwiring) |
 
@@ -182,6 +186,7 @@ netpack settings → "**更新**" (Update, `/update`):
 | bridge (XIAO C3, recommended) | `pio run -d elrs-espnow-bridge -e xiao_esp32c3 -t upload --upload-port COMx` |
 | bridge (XIAO C5, instead) | `pio run -d elrs-espnow-bridge -e xiao_esp32c5 -t upload --upload-port COMx` |
 | bridge (Wrover-E, instead) | `pio run -d elrs-espnow-bridge -e esp32dev -t upload --upload-port COMx` |
+| bridge (generic ESP32-C5) | `pio run -d elrs-espnow-bridge -e esp32c5 -t upload --upload-port COMx` |
 | timerwiring S3 | `pio run -d elrs-xiao-webui -e xiao_esp32s3_timerwiring -t upload --upload-port COMx` |
 | timerwiring C5 (bridge) | `pio run -d elrs-espnow-bridge -e xiao_esp32c5_timerwiring -t upload --upload-port COMx` |
 
