@@ -421,6 +421,12 @@ static void staBegin(int i)
     } else {
         WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));   // DHCP
     }
+    // Look on every channel and take the network's strongest access point:
+    // by default the first one heard is joined, the far one of a mesh or a
+    // repeater as often as the near one (FPV C5 Lap Timer does the same).
+    // Also used when reconnecting (WiFi.reconnect keeps it).
+    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+    WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
     LOG.printf("[wifi] connecting to %s\n", g_staSsid[i].c_str());
     WiFi.begin(g_staSsid[i].c_str(), g_staPass[i].c_str());
 }
@@ -1290,7 +1296,8 @@ static void wifiConnect()
         g_wifiLostMs = 0;
         dnsServer.stop();
         builtinLed.off();
-        LOG.printf("[wifi] connected IP=%s\n", WiFi.localIP().toString().c_str());
+        LOG.printf("[wifi] connected IP=%s  AP %s ch %d %d dBm\n", WiFi.localIP().toString().c_str(),
+                   WiFi.BSSIDstr().c_str(), WiFi.channel(), WiFi.RSSI());
         startNetServices();
         beepDouble();
     } else {
