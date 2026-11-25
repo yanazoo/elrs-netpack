@@ -437,10 +437,10 @@ static IPAddress knownLapTimer()
     return IPAddress(g_lapIp);   // RotorHazard sending MSP is not FPV C5 Lap Timer
 }
 
-// RotorHazard sending MSP here: which port its web page is on, 5000 (its
-// default) or 80 (often set), found by trying to connect (a task: a
-// connect that gets no answer takes a while). g_rhPort: 0 not known yet,
-// 0xFFFF neither answered.
+// RotorHazard sending MSP here: which port its web page is on. 5000 is
+// its default, 80 the one people set instead: 5000 is tried (a task: a
+// connect that gets no answer takes a while), and if it doesn't answer the
+// page is on 80. g_rhPort: 0 not known yet, else 5000 or 80.
 static volatile uint32_t g_rhIp = 0;
 static volatile uint16_t g_rhPort = 0;
 static volatile bool     g_rhProbing = false;
@@ -476,10 +476,9 @@ static bool portOpen(uint32_t ip, uint16_t port, int ms)
 static void rhProbeTask(void *arg)
 {
     uint32_t ip = (uint32_t)(uintptr_t)arg;
-    uint16_t port = portOpen(ip, 5000, 1500) ? 5000 : portOpen(ip, 80, 1500) ? 80 : 0xFFFF;
+    uint16_t port = portOpen(ip, 5000, 1500) ? 5000 : 80;
     if (g_rhIp == ip) g_rhPort = port;
-    LOG.printf("[rh] RotorHazard " IPSTR ": web page on %s\n", IP2STR((esp_ip4_addr_t *)&ip),
-               port == 5000 ? "port 5000" : port == 80 ? "port 80" : "neither 5000 nor 80");
+    LOG.printf("[rh] RotorHazard " IPSTR ": web page on port %u\n", IP2STR((esp_ip4_addr_t *)&ip), port);
     g_rhProbing = false;
     vTaskDelete(nullptr);
 }
@@ -849,8 +848,8 @@ static String pageQr()
     {
         bool rh = g_mspPeer && !g_peerIsLap;
         IPAddress ip = rh ? IPAddress(g_mspPeer) : knownLapTimer();
-        // RotorHazard: the port its page answered on (80 or 5000); not
-        // tried yet or neither answered: 5000, with a link for 80 below.
+        // RotorHazard: 5000 if it answered there, else 80; not tried yet:
+        // 5000, with a link for 80 below.
         uint16_t rhPort = rh && g_rhIp == (uint32_t)ip ? g_rhPort : 0;
         bool rhOn80 = rh && rhPort == 80;
         String url = (uint32_t)ip ? "http://" + ip.toString() + (rh && !rhOn80 ? ":5000/" : "/") : String("http://fpv-c5-lt.local/");
@@ -858,7 +857,7 @@ static String pageQr()
         p += "<div class='card st' style='text-align:center'>";
         p += qrSvg(url);
         p += "<a href='"; p += url; p += "' target='_blank'>"; p += url; p += "</a>";
-        if (rh && rhPort != 5000 && rhPort != 80) {
+        if (rh && !rhPort) {
             String u80 = "http://" + ip.toString() + "/";
             p += "<br>"; p += L("Set to port 80: ", "ポート 80 に変えている場合："); p += "<a href='"; p += u80; p += "' target='_blank'>"; p += u80; p += "</a>";
         }
