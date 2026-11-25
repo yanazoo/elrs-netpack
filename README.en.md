@@ -235,6 +235,7 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 **Client mode** (v2.3.0)
 - Up to **5 networks** (SSID, password). Passwords are not shown (blank keeps one); clear an SSID to delete it.
 - **Which one**: **the selected one (●)**, or **automatic** (a scan when joining; the strongest saved network in range).
+- With several access points of one SSID (a mesh, a repeater), every channel is scanned and the **strongest access point** is joined (v2.3.7, as FPV C5 Lap Timer).
 - **Address**: automatic (DHCP) or **fixed** (IP address, subnet mask, gateway, DNS; a blank DNS is the gateway). The fixed address is used on every saved network; put it in FPV C5 Lap Timer's "netpack address" for an instant connection.
 - When no network can be joined, the setup WiFi (`ELRS-NETpack-Setup`) comes up and the netpack retries every 15 s. When a joined network drops, it reconnects every 10 s and brings the setup WiFi up after 60 s.
 - The network saved by v2.2.x becomes the first one.
