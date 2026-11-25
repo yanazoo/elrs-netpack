@@ -437,6 +437,67 @@ static IPAddress knownLapTimer()
     return IPAddress(g_lapIp);   // RotorHazard sending MSP is not FPV C5 Lap Timer
 }
 
+// RotorHazard sending MSP here: which port its web page is on, 5000 (its
+// default) or 80 (often set), found by trying to connect (a task: a
+// connect that gets no answer takes a while). g_rhPort: 0 not known yet,
+// 0xFFFF neither answered.
+static volatile uint32_t g_rhIp = 0;
+static volatile uint16_t g_rhPort = 0;
+static volatile bool     g_rhProbing = false;
+static uint32_t          g_rhSeenMs = 0;
+
+static bool portOpen(uint32_t ip, uint16_t port, int ms)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) return false;
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    sockaddr_in a = {};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = ip;
+    bool ok = false;
+    if (connect(fd, (sockaddr *)&a, sizeof a) == 0) ok = true;
+    else if (errno == EINPROGRESS) {
+        fd_set w;
+        FD_ZERO(&w);
+        FD_SET(fd, &w);
+        timeval tv = {ms / 1000, (ms % 1000) * 1000};
+        if (select(fd + 1, nullptr, &w, nullptr, &tv) > 0) {
+            int err = 0;
+            socklen_t len = sizeof err;
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+            ok = err == 0;
+        }
+    }
+    close(fd);
+    return ok;
+}
+
+static void rhProbeTask(void *arg)
+{
+    uint32_t ip = (uint32_t)(uintptr_t)arg;
+    uint16_t port = portOpen(ip, 5000, 1500) ? 5000 : portOpen(ip, 80, 1500) ? 80 : 0xFFFF;
+    if (g_rhIp == ip) g_rhPort = port;
+    LOG.printf("[rh] RotorHazard " IPSTR ": web page on %s\n", IP2STR((esp_ip4_addr_t *)&ip),
+               port == 5000 ? "port 5000" : port == 80 ? "port 80" : "neither 5000 nor 80");
+    g_rhProbing = false;
+    vTaskDelete(nullptr);
+}
+
+// From loop(): a peer that hasn't shown itself as FPV C5 Lap Timer within
+// 3 s of connecting (the timer sends 0x0F03 at once) is RotorHazard.
+static void probeRotorHazard()
+{
+    uint32_t peer = g_mspPeer;
+    if (!peer || g_peerIsLap) { g_rhSeenMs = 0; return; }
+    if (!g_rhSeenMs) { g_rhSeenMs = millis() | 1; return; }
+    if (millis() - g_rhSeenMs < 3000 || peer == g_rhIp || g_rhProbing) return;
+    g_rhIp = peer;
+    g_rhPort = 0;
+    g_rhProbing = true;
+    if (xTaskCreate(rhProbeTask, "rhprobe", 4096, (void *)(uintptr_t)peer, 1, nullptr) != pdPASS) g_rhProbing = false;
+}
+
 static void lookUpLapTimer()
 {
     static mdns_search_once_t *search = nullptr;
@@ -788,11 +849,19 @@ static String pageQr()
     {
         bool rh = g_mspPeer && !g_peerIsLap;
         IPAddress ip = rh ? IPAddress(g_mspPeer) : knownLapTimer();
-        String url = (uint32_t)ip ? "http://" + ip.toString() + (rh ? ":5000/" : "/") : String("http://fpv-c5-lt.local/");
+        // RotorHazard: the port its page answered on (80 or 5000); not
+        // tried yet or neither answered: 5000, with a link for 80 below.
+        uint16_t rhPort = rh && g_rhIp == (uint32_t)ip ? g_rhPort : 0;
+        bool rhOn80 = rh && rhPort == 80;
+        String url = (uint32_t)ip ? "http://" + ip.toString() + (rh && !rhOn80 ? ":5000/" : "/") : String("http://fpv-c5-lt.local/");
         p += "<h2>"; p += rh ? "RotorHazard" : "FPV C5 Lap Timer"; p += "</h2>";
         p += "<div class='card st' style='text-align:center'>";
         p += qrSvg(url);
         p += "<a href='"; p += url; p += "' target='_blank'>"; p += url; p += "</a>";
+        if (rh && rhPort != 5000 && rhPort != 80) {
+            String u80 = "http://" + ip.toString() + "/";
+            p += "<br>"; p += L("Set to port 80: ", "ポート 80 に変えている場合："); p += "<a href='"; p += u80; p += "' target='_blank'>"; p += u80; p += "</a>";
+        }
         p += "<div class='note'>";
         if (!(uint32_t)ip)
             p += L("FPV C5 Lap Timer isn't found yet (its address shows here once it connects or answers on the same WiFi).",
@@ -1803,6 +1872,7 @@ void loop()
     if (g_beepReq) { g_beepReq = false; beepShort(); }
     if (g_reconnectAt && (int32_t)(millis() - g_reconnectAt) >= 0) { g_reconnectAt = 0; wifiConnect(); }
     g_mspPeer = (tcpClient && tcpClient.connected()) ? (uint32_t)tcpClient.remoteIP() : 0;
+    probeRotorHazard();
     if (g_hostActive || WiFi.status() == WL_CONNECTED) lookUpLapTimer();
     updateLed();
     updateVoltage();
