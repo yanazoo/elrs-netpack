@@ -429,8 +429,8 @@ It is **connectionless**, like UDP. The bridge takes the pilot's bind-phrase UID
 **`/wifi` — WiFi**: see [above](#wifi-settings-wifi).
 
 **`/qr` — QR codes** (v2.3.0)
-- Join the **ELRS-NETpack WiFi** (host mode's SSID and password): scan it with the phone's camera
-- Open **FPV C5 Lap Timer**'s screen (`http://fpv-c5-lt.local/`)
+- Top: open **FPV C5 Lap Timer**'s screen **by its IP address** (e.g. `http://192.168.4.2/`, for phones that can't open `.local`); `http://fpv-c5-lt.local/` until it is found. With **RotorHazard** connected over MSP: RotorHazard's page (`http://<IP>:5000/`) instead (v2.3.6)
+- Bottom: join the **ELRS-NETpack WiFi** (host mode's SSID and password): scan it with the phone's camera
 - Made in the netpack: shown without the internet too
 - Open **without a password**. In host mode, `http://192.168.4.1/` opens on this page
 

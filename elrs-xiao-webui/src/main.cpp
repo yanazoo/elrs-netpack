@@ -781,6 +781,27 @@ static void handleLogout()
 static String pageQr()
 {
     String p = htmlHead("QR");
+    // Top: the timer's page, by its IP address (a phone that can't open
+    // .local addresses still gets there). RotorHazard sending MSP here: its
+    // page instead (port 5000, RotorHazard's own). Neither known yet:
+    // fpv-c5-lt.local.
+    {
+        bool rh = g_mspPeer && !g_peerIsLap;
+        IPAddress ip = rh ? IPAddress(g_mspPeer) : knownLapTimer();
+        String url = (uint32_t)ip ? "http://" + ip.toString() + (rh ? ":5000/" : "/") : String("http://fpv-c5-lt.local/");
+        p += "<h2>"; p += rh ? "RotorHazard" : "FPV C5 Lap Timer"; p += "</h2>";
+        p += "<div class='card st' style='text-align:center'>";
+        p += qrSvg(url);
+        p += "<a href='"; p += url; p += "' target='_blank'>"; p += url; p += "</a>";
+        p += "<div class='note'>";
+        if (!(uint32_t)ip)
+            p += L("FPV C5 Lap Timer isn't found yet (its address shows here once it connects or answers on the same WiFi).",
+                   "FPV C5 Lap Timer がまだ見つかりません（同じ WiFi でつながると、ここに IP アドレスで出ます）。");
+        else
+            p += L("Join the same WiFi first.", "先に同じ WiFi に接続してください。");
+        p += "</div></div>";
+    }
+    // Bottom: the netpack's WiFi.
     const char *pass = g_hostPass.length() >= 8 ? g_hostPass.c_str() : HOST_PASS_DEFAULT;
     p += "<h2>"; p += L("Join the ELRS-NETpack WiFi", "ELRS-NETpack の WiFi に接続"); p += "</h2>";
     p += "<div class='card st' style='text-align:center'>";
@@ -792,15 +813,7 @@ static String pageQr()
         p += L("The netpack is in client mode now: this WiFi is up in host mode.", "今はクライアントモードです。この WiFi は、ホストモードにしたときに出ます。");
         p += "</div>";
     }
-    p += "</div>";
-    p += "<h2>FPV C5 Lap Timer</h2>";
-    p += "<div class='card st' style='text-align:center'>";
-    p += qrSvg("http://fpv-c5-lt.local/");
-    p += "<a href='http://fpv-c5-lt.local/' target='_blank'>http://fpv-c5-lt.local/</a>";
-    p += "<div class='note'>";
-    p += L("Join the same WiFi first. If the phone can't open .local addresses, use the FPV C5 Lap Timer link (its IP address) at the top of the WiFi page.",
-           "先に同じ WiFi に接続してください。スマホが .local のアドレスを開けないときは、WiFi のページのいちばん上の「FPV C5 Lap Timer」のリンク（IP アドレス）を使ってください。");
-    p += "</div></div></body></html>";
+    p += "</div></body></html>";
     return p;
 }
 
