@@ -10,7 +10,6 @@
 #include <lwip/sockets.h>
 #include <Update.h>
 #include "esp_netif.h"
-#include "usb_tether.h"
 #include "fw_update.h"
 #include "qrcode.h"
 #include "log.h"
@@ -86,7 +85,6 @@ Print *g_log = &Serial;
 
 // Host mode: the netpack's own WiFi. The timer (client mode) and the phones
 // join it; the MSP from the timer goes on to the ESP-NOW bridge as ever.
-// With USB tethering, a phone on the USB port takes it out to the internet.
 static uint8_t  g_netMode    = 0;       // 0 = client (joins a WiFi), 1 = host (as running)
 static uint8_t  g_netModeSet = 0;       // the mode chosen on the page
 static uint8_t  g_swMode     = 0;       // mode switch: 0 not used, 1 used
@@ -105,7 +103,6 @@ static uint8_t  g_hostPhones = HOST_PHONES_DEFAULT;   // phones / PCs besides FP
 static uint8_t  g_lapMac[6];                          // FPV C5 Lap Timer's (learned from its TCP)
 static bool     g_lapMacKnown = false;
 static bool isLapTimer(const uint8_t *mac);
-static bool     g_tetherEn   = false;   // USB tethering (host mode only)
 
 // Client mode: up to 5 networks (as the timer), joined as selected or, with
 // "automatic", the strongest of them in range; a fixed address if set.
@@ -146,10 +143,17 @@ static struct {
     uint32_t phaseMs    = 0;
 } g_beep;
 
-static void beepStart(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
+// A beep asked for while another is sounding waits its turn (a short
+// queue): it used to cut the one sounding and start over, so WiFi joined
+// (2 short) and FPV C5 Lap Timer connecting (1 short) a moment later ran
+// together into a fast "pipipi". Played one after the other with a pause.
+static const uint16_t BEEP_BETWEEN_MS = 250;   // pause between two queued beeps
+static struct { uint8_t pulses; uint16_t onMs, gapMs; } g_beepQ[4];
+static uint8_t  g_beepQn = 0;
+static uint32_t g_beepNextAt = 0;   // millis() the next queued beep may start (0: none waiting)
+
+static void beepPlay(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
 {
-    if (pulses == 0) return;
-    if (!g_buzzerEnabled && !g_ledEnabled) return;
     g_beep.active     = true;
     g_beep.phaseOn    = true;
     g_beep.pulsesLeft = pulses;
@@ -160,8 +164,20 @@ static void beepStart(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
     if (g_ledEnabled)    nlWrite(255);
 }
 
+static void beepStart(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
+{
+    if (pulses == 0) return;
+    if (!g_buzzerEnabled && !g_ledEnabled) return;
+    if (!g_beep.active && !g_beepQn && (int32_t)(millis() - g_beepNextAt) >= 0) {
+        beepPlay(pulses, onMs, gapMs);
+        return;
+    }
+    if (g_beepQn < 4) g_beepQ[g_beepQn++] = {pulses, onMs, gapMs};   // full: dropped
+}
+
 static void beepCancel()
 {
+    g_beepQn = 0;   // the waiting ones go too
     if (!g_beep.active) return;
     g_beep.active = false;
     buzzerRawOff();
@@ -171,13 +187,26 @@ static void beepCancel()
 // loop() 毎回呼ぶ。millis ベースで ON/OFF を進める（delay 不使用）。
 static void updateBeep()
 {
-    if (!g_beep.active) return;
     uint32_t now = millis();
+    if (!g_beep.active) {
+        // The next one waiting, after the pause.
+        if (g_beepQn && (int32_t)(now - g_beepNextAt) >= 0) {
+            auto b = g_beepQ[0];
+            for (int i = 1; i < g_beepQn; i++) g_beepQ[i - 1] = g_beepQ[i];
+            g_beepQn--;
+            beepPlay(b.pulses, b.onMs, b.gapMs);
+        }
+        return;
+    }
     if (g_beep.phaseOn) {
         if (now - g_beep.phaseMs < g_beep.onMs) return;
         buzzerRawOff();
         nlWrite(0);
-        if (--g_beep.pulsesLeft == 0) { g_beep.active = false; return; }
+        if (--g_beep.pulsesLeft == 0) {
+            g_beep.active = false;
+            g_beepNextAt = (now + BEEP_BETWEEN_MS) | 1;   // a pause before anything after it
+            return;
+        }
         g_beep.phaseOn = false;
         g_beep.phaseMs = now;
     } else {
@@ -324,7 +353,11 @@ static String htmlHead(const char *title)
          "border-radius:5px;color:#ddd;margin-top:4px;font-size:.95em}"
          "input[type=text]:focus,input[type=password]:focus,input[type=number]:focus"
          "{outline:none;border-color:#5b9bd5}"
-         "input[type=checkbox]{width:auto;accent-color:#5b9bd5}"
+         // Radio buttons and checkboxes one size everywhere: iPhone browsers
+         // drew them from the text size around them, small in some places
+         // (the connection choice) and large in others (the networks list).
+         "input[type=radio],input[type=checkbox]{width:22px;height:22px;margin:0;flex:none;"
+         "accent-color:#5b9bd5}"
          "button{margin-top:18px;padding:9px 22px;background:#1a4a8a;color:#dde6f0;"
          "border:none;border-radius:5px;cursor:pointer;font-size:.95em}"
          "button:hover{background:#1f5aa8}"
@@ -339,12 +372,10 @@ static String htmlHead(const char *title)
          "select{width:100%;padding:8px 10px;background:#212121;border:1px solid #383838;"
          "border-radius:5px;color:#ddd;margin-top:4px;font-size:.95em}"
          ".radio{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:.9em}"
-         ".radio input{width:auto;accent-color:#5b9bd5}"
          ".nets{width:100%;border-collapse:collapse;margin-top:8px;font-size:.88em}"
          ".nets th{color:#888;font-weight:normal;text-align:left;padding:2px 4px}"
-         ".nets td{padding:2px 4px}.nets td:first-child{width:24px}"
+         ".nets td{padding:2px 4px}.nets td:first-child{width:28px}"
          ".nets input[type=text],.nets input[type=password]{margin-top:0}"
-         ".nets input[type=radio]{accent-color:#5b9bd5}"
          ".ipgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}"
          "</style></head><body>";
     h += "<div class='topbar'><h1>ELRS-NETpack</h1>";
@@ -432,7 +463,7 @@ static void staBegin(int i)
 }
 
 // What the netpack is doing now: its WiFi, who sends it MSP (the timer:
-// a link to its page), the devices on its WiFi, the USB tethering.
+// a link to its page), the devices on its WiFi.
 // FPV C5 Lap Timer's address, kept by loop() for the pages and the DNS
 // relay (they never wait): the MSP peer, else the last answer of an mDNS
 // lookup for fpv-c5-lt.local made in the background every 30 s.
@@ -576,17 +607,6 @@ static String statusCard()
             else snprintf(b, sizeof b, "・%s（%d dBm）<br>", L("no address yet", "アドレス未取得"), sl.sta[i].rssi);
             p += b;
         }
-        if (g_tetherEn) {
-            TetherInfo t;
-            tetherInfo(&t);
-            p += L("USB tethering: ", "USB テザリング："); p += tetherStateText(t.state, g_langJa);
-            if (t.product[0]) { p += "（"; p += htmlEsc(t.product); if (t.proto[0]) { p += " / "; p += t.proto; } p += "）"; }
-            if (t.state == TetherState::Up) {
-                snprintf(b, sizeof b, "<br>・" IPSTR " / DNS " IPSTR, IP2STR(&t.ip.ip), IP2STR(&t.dns));
-                p += b;
-            }
-            p += "<br>";
-        }
     }
     p += L("Firmware ", "ファーム "); p += fwVersion(); p += "（"; p += fwBuild(); p += "）";
     if (fwTimerWiring()) p += L(" timerwiring ", " タイマー流用版 ");
@@ -686,12 +706,6 @@ static String pageWifi(const String &msg = "")
     p += "<div class='note'>";
     p += L("FPV C5 Lap Timer joins this WiFi in client mode (its netpack address: auto). Phones open it from its link at the top. ",
            "FPV C5 Lap Timer はクライアントモードでこの WiFi に接続します（netpack アドレスは auto）。スマホからは、上の「FPV C5 Lap Timer」のリンクで画面を開けます。");
-    p += "</div>";
-    p += "<div class='chk'><input type='checkbox' name='tether' value='1'"; if (g_tetherEn) p += " checked";
-    p += "><span>"; p += L("USB tethering: a phone on the USB port takes this WiFi to the internet", "USB テザリング：USB につないだスマホから、この WiFi をインターネットへ"); p += "</span></div>";
-    p += "<div class='note'>";
-    p += L("Host mode only. Android: turn on Settings → Network → Hotspot &amp; tethering → USB tethering. While on, the USB port is not a serial port: update from the Update page (or hold BOOT while plugging in).",
-           "ホストモードのときだけ動きます。Android は「設定 → ネットワーク → テザリング → USB テザリング」を ON。ON の間は USB でのシリアル・書き込みはできません（書き込みは「更新」ページ、または BOOT を押しながら USB を接続）。");
     p += "</div>";
     p += "<h2>"; p += L("Admin password", "管理者パスワード"); p += "</h2>";
     p += "<label>"; p += L("Password (blank keeps it)", "パスワード（変えないときは空欄）");
@@ -980,11 +994,8 @@ static void startNetServices()
 // ── Host mode ─────────────────────────────────────────────────────────────────
 
 // DNS for the devices on the netpack's WiFi (DHCP gives them 192.168.4.1):
-// passed on to the phone's DNS while USB tethering is up, else answered
-// "server failure" at once (no internet: the phone stops waiting).
-static int g_dnsSock = -1, g_dnsUp = -1;
-static struct DnsPend { uint16_t id, orig; sockaddr_in from; uint32_t ms; bool used; } g_dnsPend[16];
-static uint16_t g_dnsNextId = 1;
+// answered here (there is no way out to the internet).
+static int g_dnsSock = -1;
 
 static int udpSocket(uint16_t port)
 {
@@ -1052,14 +1063,12 @@ static int dnsAnswer(uint8_t *buf, int n, int cap, uint32_t addr)
 static void dnsRelayBegin()
 {
     if (g_dnsSock < 0) g_dnsSock = udpSocket(53);
-    if (g_dnsUp < 0) g_dnsUp = udpSocket(0);
 }
 
 static void dnsRelayPoll()
 {
-    if (g_dnsSock < 0 || g_dnsUp < 0) return;
+    if (g_dnsSock < 0) return;
     uint8_t buf[512];
-    uint32_t now = millis();
     for (int k = 0; k < 4; k++) {   // queries from the WiFi
         sockaddr_in from;
         socklen_t fl = sizeof from;
@@ -1077,44 +1086,12 @@ static void dnsRelayPoll()
             if (m > 0) sendto(g_dnsSock, buf, m, 0, (sockaddr *)&from, fl);
             continue;
         }
-        TetherInfo t;
-        tetherInfo(&t);
-        if (t.state != TetherState::Up) {
-            // No way out: every name is us (as FPV C5 Lap Timer's access
-            // point does). A computer's "is there internet?" check then gets
-            // its answer at once; with "server failure" Windows kept asking
-            // and sat on "checking network requirements" for a long time.
-            int m = dnsAnswerSelf(buf, n, sizeof buf);
-            if (m > 0) sendto(g_dnsSock, buf, m, 0, (sockaddr *)&from, fl);
-            continue;
-        }
-        int slot = -1;
-        for (int i = 0; i < 16; i++)
-            if (!g_dnsPend[i].used || now - g_dnsPend[i].ms > 5000) { slot = i; break; }
-        if (slot < 0) continue;
-        DnsPend &d = g_dnsPend[slot];
-        d.used = true; d.ms = now; d.from = from;
-        d.orig = (buf[0] << 8) | buf[1];
-        d.id = g_dnsNextId++;
-        buf[0] = d.id >> 8; buf[1] = d.id;
-        sockaddr_in up = {};
-        up.sin_family = AF_INET;
-        up.sin_port = htons(53);
-        up.sin_addr.s_addr = t.dns.addr ? t.dns.addr : inet_addr("8.8.8.8");
-        sendto(g_dnsUp, buf, n, 0, (sockaddr *)&up, sizeof up);
-    }
-    for (int k = 0; k < 4; k++) {   // answers from the phone's DNS
-        int n = recv(g_dnsUp, buf, sizeof buf, 0);
-        if (n < 12) break;
-        uint16_t id = (buf[0] << 8) | buf[1];
-        for (int i = 0; i < 16; i++) {
-            DnsPend &d = g_dnsPend[i];
-            if (!d.used || d.id != id) continue;
-            buf[0] = d.orig >> 8; buf[1] = d.orig;
-            sendto(g_dnsSock, buf, n, 0, (sockaddr *)&d.from, sizeof d.from);
-            d.used = false;
-            break;
-        }
+        // Every other name is us (as FPV C5 Lap Timer's access point does).
+        // A computer's "is there internet?" check then gets its answer at
+        // once; with "server failure" Windows kept asking and sat on
+        // "checking network requirements" for a long time.
+        int m = dnsAnswerSelf(buf, n, sizeof buf);
+        if (m > 0) sendto(g_dnsSock, buf, m, 0, (sockaddr *)&from, fl);
     }
 }
 
@@ -1146,17 +1123,6 @@ static void startHost()
     LOG.printf("[host] WiFi %s ch %u  IP=%s\n", g_hostSsid.c_str(), g_hostCh, WiFi.softAPIP().toString().c_str());
     startNetServices();
     dnsRelayBegin();
-    if (g_tetherEn) {
-        // The USB port becomes the host's: the log moves to UART0 (D6).
-        LOG.println("[host] USB tethering on: the log continues on D6 (UART0 TX, 115200)");
-        Serial.flush();
-        Serial.end();
-        Serial0.begin(115200);
-        g_log = &Serial0;
-        if (tetherBegin()) {
-            if (WiFi.AP.enableNAPT(true)) LOG.println("[host] NAPT on: the WiFi goes out through the phone");
-        }
-    }
     beepDouble();
 }
 
@@ -1433,7 +1399,6 @@ static void handleWifiPost()
     int     hch    = webServer.arg("hch").toInt();
     int     hmax   = webServer.arg("hmax").toInt();
     if (hmax < 1 || hmax > HOST_PHONES_MAX) hmax = HOST_PHONES_DEFAULT;
-    bool    tether = webServer.hasArg("tether");
     hssid.trim();
     if (hch < 6 || hch > 11) hch = HOST_CH_DEFAULT;
 
@@ -1476,13 +1441,13 @@ static void handleWifiPost()
         webServer.send(200, "text/html", pageWifi(L("The host password needs 8-63 characters.", "ホストのパスワードは 8〜63 文字にしてください。")));
         return;
     }
-    // A change of mode, of the host's WiFi or of tethering: restart (the
-    // WiFi and the USB port start afresh). The client's network alone:
+    // A change of mode or of the host's WiFi: restart (the
+    // WiFi starts afresh). The client's network alone:
     // join it now, as before.
     // With the mode switch set, the switch decides the mode (at start-up):
     // the page's choice is only kept for when it's taken off.
     uint8_t runMode = sw ? g_netMode : mode;
-    bool restart = sw != g_swMode || runMode != g_netMode || tether != g_tetherEn ||
+    bool restart = sw != g_swMode || runMode != g_netMode ||
                    (runMode == 1 && (hssid != g_hostSsid || hpass.length() || hch != g_hostCh || hmax != g_hostPhones));
     prefs.begin("elrs", false);
     for (int i = 0; i < STA_NETS; i++) {
@@ -1517,7 +1482,6 @@ static void handleWifiPost()
     if (hpass.length()) prefs.putString("hPass", hpass);
     prefs.putUChar("hCh", hch);
     prefs.putUChar("hMax", hmax);
-    prefs.putBool("tether", tether);
     prefs.end();
     g_netModeSet = mode;
     g_netMode = runMode;
@@ -1676,7 +1640,6 @@ static void loadPrefs()
     g_hostSsid         = prefs.getString("hSsid",     HOST_SSID_DEFAULT);
     g_hostPass         = prefs.getString("hPass",     HOST_PASS_DEFAULT);
     g_hostCh           = prefs.getUChar("hCh",        HOST_CH_DEFAULT);
-    g_tetherEn         = prefs.getBool("tether",      false);
     if (g_hostCh < 6 || g_hostCh > 11) g_hostCh = HOST_CH_DEFAULT;
     g_hostPhones       = prefs.getUChar("hMax",       HOST_PHONES_DEFAULT);
     if (g_hostPhones < 1 || g_hostPhones > HOST_PHONES_MAX) g_hostPhones = HOST_PHONES_DEFAULT;
@@ -1840,9 +1803,9 @@ void setup()
     webServer.on("/voltage",             HTTP_POST, handleVoltagePost);
     webServer.on("/voltage/cal",         HTTP_POST, handleVoltageCal);
     webServer.on("/lang",                HTTP_GET,  handleLangToggle);
-    // Firmware update: from the internet (a router, or USB tethering) or a file.
+    // Firmware update: from the internet (client mode, through the router) or a file.
     fwUpdateRoutes(
-        [] { return (!g_hostActive && !apModeActive && WiFi.status() == WL_CONNECTED) || tetherNetif() != nullptr; },
+        [] { return (!g_hostActive && !apModeActive && WiFi.status() == WL_CONNECTED) ; },
         htmlHead, [] { return g_langJa; }, authed);
     webServer.on("/generate_204",        HTTP_GET,  handleRoot);
     webServer.on("/hotspot-detect.html", HTTP_GET,  handleRoot);

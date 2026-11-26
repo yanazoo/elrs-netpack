@@ -289,8 +289,8 @@ String page(const String &msg = "")
 
     p += "<h2>"; p += L("From the internet", "ネットから更新"); p += "</h2>";
     p += "<div class='note'>";
-    p += L("Needs the internet: a router (client mode) or USB tethering (host mode).",
-           "インターネットが必要です（クライアントモードのルーター、またはホストモードの USB テザリング）。");
+    p += L("Needs the internet: a router (client mode).",
+           "インターネットが必要です（クライアントモードでルーターにつながっているとき）。");
     p += "</div>";
     p += "<button type='button' id='chk' onclick='chk()'>🔍 "; p += L("Check for the latest", "最新版を確認"); p += "</button> ";
     p += "<button type='button' id='upd' onclick='upd()' style='display:none'></button>";

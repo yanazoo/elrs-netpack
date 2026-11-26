@@ -2,7 +2,7 @@
 // Firmware update of the netpack XIAO, from its web UI (/update):
 //   * online: "check" reads the newest release's version from GitHub, then
 //     "update" downloads its firmware.bin and writes it (the netpack needs
-//     the internet: a router in client mode, or USB tethering in host mode);
+//     the internet: a router, in client mode);
 //   * a file: a firmware.bin from the browser.
 // Release assets (publish-release.yaml) keep the same names in every
 // release, so .../releases/latest/download/<name> is always the newest.
