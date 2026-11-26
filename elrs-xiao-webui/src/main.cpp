@@ -146,10 +146,17 @@ static struct {
     uint32_t phaseMs    = 0;
 } g_beep;
 
-static void beepStart(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
+// A beep asked for while another is sounding waits its turn (a short
+// queue): it used to cut the one sounding and start over, so WiFi joined
+// (2 short) and FPV C5 Lap Timer connecting (1 short) a moment later ran
+// together into a fast "pipipi". Played one after the other with a pause.
+static const uint16_t BEEP_BETWEEN_MS = 250;   // pause between two queued beeps
+static struct { uint8_t pulses; uint16_t onMs, gapMs; } g_beepQ[4];
+static uint8_t  g_beepQn = 0;
+static uint32_t g_beepNextAt = 0;   // millis() the next queued beep may start (0: none waiting)
+
+static void beepPlay(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
 {
-    if (pulses == 0) return;
-    if (!g_buzzerEnabled && !g_ledEnabled) return;
     g_beep.active     = true;
     g_beep.phaseOn    = true;
     g_beep.pulsesLeft = pulses;
@@ -160,8 +167,20 @@ static void beepStart(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
     if (g_ledEnabled)    nlWrite(255);
 }
 
+static void beepStart(uint8_t pulses, uint16_t onMs, uint16_t gapMs)
+{
+    if (pulses == 0) return;
+    if (!g_buzzerEnabled && !g_ledEnabled) return;
+    if (!g_beep.active && !g_beepQn && (int32_t)(millis() - g_beepNextAt) >= 0) {
+        beepPlay(pulses, onMs, gapMs);
+        return;
+    }
+    if (g_beepQn < 4) g_beepQ[g_beepQn++] = {pulses, onMs, gapMs};   // full: dropped
+}
+
 static void beepCancel()
 {
+    g_beepQn = 0;   // the waiting ones go too
     if (!g_beep.active) return;
     g_beep.active = false;
     buzzerRawOff();
@@ -171,13 +190,26 @@ static void beepCancel()
 // loop() 毎回呼ぶ。millis ベースで ON/OFF を進める（delay 不使用）。
 static void updateBeep()
 {
-    if (!g_beep.active) return;
     uint32_t now = millis();
+    if (!g_beep.active) {
+        // The next one waiting, after the pause.
+        if (g_beepQn && (int32_t)(now - g_beepNextAt) >= 0) {
+            auto b = g_beepQ[0];
+            for (int i = 1; i < g_beepQn; i++) g_beepQ[i - 1] = g_beepQ[i];
+            g_beepQn--;
+            beepPlay(b.pulses, b.onMs, b.gapMs);
+        }
+        return;
+    }
     if (g_beep.phaseOn) {
         if (now - g_beep.phaseMs < g_beep.onMs) return;
         buzzerRawOff();
         nlWrite(0);
-        if (--g_beep.pulsesLeft == 0) { g_beep.active = false; return; }
+        if (--g_beep.pulsesLeft == 0) {
+            g_beep.active = false;
+            g_beepNextAt = (now + BEEP_BETWEEN_MS) | 1;   // a pause before anything after it
+            return;
+        }
         g_beep.phaseOn = false;
         g_beep.phaseMs = now;
     } else {
