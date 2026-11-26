@@ -50,13 +50,12 @@
 
 **A. Client mode (default)** — the netpack XIAO joins FPV C5 Lap Timer's WiFi (FPV C5 Lap Timer in host mode) or the venue's router. FPV C5 Lap Timer (or RotorHazard) finds the netpack as `elrs-netpack.local` and connects to TCP 8080.
 
-**B. Host mode (v2.2.0)** — the netpack XIAO runs its own WiFi; FPV C5 Lap Timer (client mode) and phones join it. A setup built around the netpack. An Android phone on its USB port can take this WiFi to the internet with **USB tethering** ([below](#host-mode-and-usb-tethering)).
+**B. Host mode (v2.2.0)** — the netpack XIAO runs its own WiFi; FPV C5 Lap Timer (client mode) and phones join it. A setup built around the netpack ([below](#host-mode)).
 
 ```
  phones (viewers, admin) ──┐
  FPV C5 Lap Timer ─────────┼── WiFi "ELRS-NETpack" ── netpack XIAO ──UART── ELRS Backpack bridge ── goggles
- (client mode)             ┘     (ch 6-11)              │USB
-                                                        └── Android phone (USB tethering) ── internet
+ (client mode)             ┘     (ch 6-11)
 ```
 
 ---
@@ -91,7 +90,6 @@
 | 3 jumper wires | TX / RX / GND |
 | USB cables | Writing and power (data-capable) |
 | (optional) active buzzer, LED, resistors, switch, LiPo | See [Buzzer, LEDs, mode switch](#buzzer-leds-mode-switch-voltage-optional) |
-| (for USB tethering) USB-C → USB-A OTG adapter | See [USB tethering cabling and power](#usb-tethering-cabling-and-power-important) |
 
 ---
 
@@ -153,7 +151,7 @@ Open **[https://yanazoo.github.io/elrs-netpack/](https://yanazoo.github.io/elrs-
 
 netpack settings → "**更新**" (Update, `/update`):
 
-- **Online**: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update). Needs the internet (a router in client mode, or USB tethering in host mode).
+- **Online**: "🔍 最新版を確認" (check) → "⬇️ … に更新" (update). Needs the internet (a router, in client mode).
 - **A file**: pick a firmware.bin (`elrs-netpack-xiao_esp32s3-firmware.bin`, or the one in the release zip). The timerwiring build's is `elrs-netpack-xiao_esp32s3-timerwiring-firmware.bin` (the other build's file is refused before it is written).
 
 ### Release files
@@ -230,7 +228,7 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 
 ## WiFi settings (`/wifi`)
 
-**State**: at the top, a link to **FPV C5 Lap Timer**'s screen (the MSP peer, or `fpv-c5-lt.local` looked up on the same WiFi; "not found" otherwise); then the mode and address, the MSP connection, the firmware version; in host mode the devices on the WiFi and the USB tethering state.
+**State**: at the top, a link to **FPV C5 Lap Timer**'s screen (the MSP peer, or `fpv-c5-lt.local` looked up on the same WiFi; "not found" otherwise); then the mode and address, the MSP connection, the firmware version; in host mode the devices on the WiFi.
 
 **Client mode** (v2.3.0)
 - Up to **5 networks** (SSID, password). Passwords are not shown (blank keeps one); clear an SSID to delete it.
@@ -245,17 +243,16 @@ The bridge needs no setup. Its ESP-NOW channel is `ESPNOW_CHANNEL` in `platformi
 - One more is sent off and kept out for 30 s. FPV C5 Lap Timer is learnt from its own OSD connection (once seen, it can always join; RotorHazard or another device on TCP 8080 is not learnt) (v2.3.1).
 - Raise it for a crowd watching on the netpack's WiFi (10 devices in all at most).
 
-**USB tethering**: on / off (host mode only).
 
 **Mode switch** (v2.3.0): host or client mode chosen by a switch on the box; tick "**物理スイッチを使う**" (use a mode switch, unticked by default). Wiring and use: [Mode switch](#mode-switch).
 
-Changing the connection, the host's WiFi or tethering restarts the netpack after saving.
+Changing the connection or the host's WiFi restarts the netpack after saving.
 
 > **WiFi channel**: ESP-NOW is fixed on **channel 1** (the ELRS VRx backpack's). Keep the router the netpack joins, and the host-mode WiFi, on 2.4 GHz **channels 6-11** (1-4 compete with the OSD). The netpack's WiFi is **20 MHz wide** in host mode, client mode and the setup WiFi alike (v2.3.3; 40 MHz would also cover the neighbouring channels).
 
 ---
 
-## Host mode and USB tethering
+## Host mode
 
 **Host mode** (WiFi settings page)
 
@@ -265,23 +262,6 @@ Changing the connection, the host's WiFi or tethering restarts the netpack after
 4. Phones join the same WiFi; the "**FPV C5 Lap Timer**" link at the top of the netpack's page opens its screen (the MSP peer, or `fpv-c5-lt.local` found on the same WiFi).
 5. Phones / PCs **up to the number set** (default 5); one more place is always free for FPV C5 Lap Timer. The page lists the devices on the WiFi with their signal.
 6. To go back, pick "Client" and save.
-
-**USB tethering** (host mode only)
-
-With an Android phone on the XIAO's USB-C and its "USB tethering" on, the devices on the netpack's WiFi (FPV C5 Lap Timer, phones) reach the internet through the phone's mobile data (FPV C5 Lap Timer's update check and online update, for instance).
-
-- Tick "**USB テザリング**" (USB tethering) on the WiFi settings page and save (off by default).
-- On the phone: Settings → Network & internet → Hotspot & tethering → **USB tethering** (names vary). RNDIS (most Android phones) and CDC-NCM / ECM (newer Pixels and others) work. **iPhones do not.**
-- The settings page shows the state (waiting for a phone → turn tethering on → waiting for an address → **up**).
-- The netpack passes the devices' DNS on to the phone's and routes their traffic out through the phone (NAPT).
-- The tethering phone itself should not join the netpack's WiFi (its way out would loop back to the netpack).
-
-### USB tethering cabling and power (important)
-
-- The XIAO is the USB **host**. Plug a **USB-C (male) → USB-A (female) OTG adapter** into the XIAO and use the phone's charging cable (USB-A → phone). A USB-C ↔ USB-C cable makes the phone the host and does not work.
-- The phone only sees the connection with **5 V on VBUS**. The XIAO's 5V pin is the USB VBUS, so a netpack **powered through its 5V pin** (through a diode, from a 5 V BEC or USB supply) puts 5 V there. With only a LiPo on the BAT pads there is no 5 V, and the phone sees nothing.
-- The phone tries to charge from VBUS (up to about 500 mA). Leave the supply some headroom.
-- While it is on, the USB port is not the XIAO's serial port: **the log goes to D6 (GPIO43, UART0 TX, 115200)**. Update from the **Update** page, or hold BOOT while plugging the XIAO into a PC.
 
 ---
 
@@ -331,7 +311,6 @@ The netpack works without any of them. With them, you hear and see it connect an
 | Mode switch (other side to GND) | D4 / GPIO5 | D1 / GPIO2 |
 | Voltage (LiPo+ → 100 kΩ → **here** → 100 kΩ → GND) | D2 / GPIO3 | D2 / GPIO3 |
 | Built-in LED (on the board) | GPIO21 | GPIO21 |
-| Log output (while USB tethering is on) | D6 / GPIO43 | D6 / GPIO43 |
 
 ### What the buzzer and the notification LED tell
 
@@ -397,7 +376,6 @@ On 5V (a power bank or a BEC), leave the divider off and the alarm off (a power 
 | Web settings | WiFi, voltage, QR and update pages; Japanese / English |
 | WiFi (client) | 5 networks (selected / automatic), fixed address, setup WiFi (captive portal) when none can be joined |
 | WiFi (host) | The netpack's own WiFi (SSID, password, ch 6-11), FPV C5 Lap Timer + phones / PCs (1-9, default 5), DNS relay |
-| USB tethering | In host mode, to the internet through an Android phone (RNDIS / NCM / ECM, NAPT) |
 | mDNS | `elrs-netpack.local` (web and TCP) |
 | Firmware update | Online (GitHub release) or from a file |
 | Voltage monitor and alarm | Shows the LiPo voltage; buzzer and LED below the threshold |
@@ -476,7 +454,6 @@ Every setting survives power-off (ESP32 Preferences, namespace `elrs`). Only an 
 | `hCh` | UChar | 6 | Host mode channel (6-11) |
 | `hMax` | UChar | 5 | Host mode phones / PCs (1-9, besides FPV C5 Lap Timer) |
 | `lapMac` | Bytes | — | FPV C5 Lap Timer's MAC (learnt from its own OSD connection; never sent off by the limit) |
-| `tether` | Bool | false | USB tethering (host mode only) |
 | `admPass` | String | `admin` | Admin password (every page but QR; change it) |
 | `loginMin` | UShort | 720 | How long a login lasts (minutes: 5, 30, 60, 360, 720) |
 | `vbatRatio` | Float | 2.0 | Voltage divider ratio |
@@ -510,9 +487,6 @@ The settings pages' (all but QR) **admin password defaults to `admin`** (a publi
 | FPV C5 Lap Timer doesn't show "ELRS netpack 接続中" | FPV C5 Lap Timer's connection ("WiFi（elrs-netpack XIAO, TCP）"), its netpack address (`auto` or the IP), the "MSP" line on the netpack's page |
 | No OSD in the goggles | The bridge wiring (TX/RX crossed, GND), the bridge's boot log, the bind phrase matching the goggles, the ESP-NOW channel (1) |
 | OSD drops or lags | Router / host WiFi on ch 6-11; the bridge's antenna (fit the XIAO C3 / C5 antenna) |
-| USB tethering stays at "waiting for a phone" | The OTG adapter on the XIAO side; power through the 5V pin (VBUS needs 5 V) |
-| USB tethering stays at "turn tethering on" | Turn the phone's USB tethering on; iPhones don't work |
-| Can't write over USB while tethering | Use the Update page, or hold BOOT while plugging into a PC |
 | A PlatformIO build fails | The first build downloads packages (takes a while); try `pio pkg update`. On Windows, `No module named intelhex`: `C:\Users\<user>\.platformio\penv\Scripts\python.exe -m pip install intelhex` |
 
 ---
